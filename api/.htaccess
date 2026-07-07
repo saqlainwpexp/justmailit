@@ -1,0 +1,12 @@
+Options -Indexes
+RewriteEngine On
+
+# Route all /api/* requests to index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# Block direct access to config files
+<FilesMatch "config\.php$|config\.local\.php$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>

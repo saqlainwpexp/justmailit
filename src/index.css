@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #f3f5f0;
+    color: #1a2512;
+    min-height: 100vh;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-xl shadow-card p-6;
+  }
+
+  .btn-primary {
+    @apply bg-forest text-white px-5 py-2.5 rounded-lg text-sm font-medium
+           hover:bg-forest-light transition-colors duration-150 flex items-center gap-2;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-sage-800 border border-sage-200 px-4 py-2 rounded-lg text-sm
+           font-medium hover:bg-sage-50 transition-colors duration-150 flex items-center gap-2;
+  }
+
+  .btn-ghost {
+    @apply text-sage-600 px-3 py-1.5 rounded-lg text-sm font-medium
+           hover:bg-sage-100 transition-colors duration-150 flex items-center gap-2;
+  }
+
+  .stat-badge-up {
+    @apply inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full
+           bg-green-50 text-green-700;
+  }
+
+  .stat-badge-down {
+    @apply inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full
+           bg-red-50 text-red-600;
+  }
+
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-sage-700
+           hover:bg-sage-100 transition-colors duration-150 cursor-pointer w-full;
+  }
+
+  .nav-item-active {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
+           bg-lime-active text-forest transition-colors duration-150 cursor-pointer w-full;
+  }
+
+  .input {
+    @apply w-full border border-sage-200 rounded-lg px-3.5 py-2.5 text-sm text-sage-900
+           placeholder:text-sage-400 focus:outline-none focus:ring-2 focus:ring-forest/20
+           focus:border-forest transition-colors duration-150 bg-white;
+  }
+
+  .label {
+    @apply block text-xs font-medium text-sage-600 mb-1.5;
+  }
+
+  .page-title {
+    @apply text-2xl font-semibold text-forest tracking-tight;
+  }
+
+  .page-subtitle {
+    @apply text-sm text-sage-500 mt-0.5;
+  }
+
+  .section-title {
+    @apply text-base font-semibold text-forest;
+  }
+
+  .divider {
+    @apply border-t border-sage-100 my-4;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #c8d4ba;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a8ba92;
+}
+
+/* React Flow overrides */
+.react-flow__node {
+  font-family: 'Inter', sans-serif;
+}
