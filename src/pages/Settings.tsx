@@ -413,6 +413,84 @@ function SecurityTab() {
   )
 }
 
+// ─── Transactional email API ──────────────────────────────────────────────────
+
+interface TxLog {
+  id: number
+  to: string
+  subject: string
+  status: 'sent' | 'failed' | 'pending'
+  error: string | null
+  createdAt: string
+}
+
+const TX_STATUS_STYLE: Record<TxLog['status'], string> = {
+  sent: 'bg-green-50 text-green-700',
+  failed: 'bg-red-50 text-red-600',
+  pending: 'bg-amber-50 text-amber-700',
+}
+
+function TransactionalApiSection() {
+  const [logs, setLogs] = useState<TxLog[]>([])
+  const [loading, setLoading] = useState(true)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    apiFetch<TxLog[]>('/api/transactional-logs').then(setLogs).catch(() => {}).finally(() => setLoading(false))
+  }, [])
+
+  const snippet = `curl -X POST ${window.location.origin}/api/v1/send \\
+  -H "api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "to": "customer@example.com",
+    "subject": "Your order has shipped",
+    "htmlBody": "<p>Thanks for your order! It is on its way.</p>"
+  }'`
+
+  return (
+    <div className="card space-y-4">
+      <div>
+        <h2 className="section-title">Transactional email API</h2>
+        <p className="text-xs text-sage-400 mt-0.5">Send a single email from your own code — receipts, password resets, order updates — outside the campaign flow.</p>
+      </div>
+      <div className="relative bg-sage-900 rounded-xl p-4">
+        <button
+          onClick={() => { navigator.clipboard.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
+          className="absolute top-3 right-3 text-sage-400 hover:text-white transition-colors"
+        >
+          {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+        <pre className="text-[11px] text-sage-200 font-mono whitespace-pre-wrap leading-relaxed">{snippet}</pre>
+      </div>
+      <p className="text-[11px] text-sage-400">
+        Optional fields: <code className="bg-sage-50 px-1 py-0.5 rounded">replyTo</code>, <code className="bg-sage-50 px-1 py-0.5 rounded">fromAccountId</code> (defaults to your first connected account), <code className="bg-sage-50 px-1 py-0.5 rounded">text</code> (plain-text fallback).
+      </p>
+
+      <div>
+        <p className="text-xs font-semibold text-sage-600 mb-2">Recent sends</p>
+        {loading ? (
+          <div className="flex items-center gap-2 py-4 text-xs text-sage-400"><Loader2 className="w-4 h-4 animate-spin" />Loading…</div>
+        ) : logs.length === 0 ? (
+          <p className="text-xs text-sage-400 py-4">No transactional emails sent yet.</p>
+        ) : (
+          <div className="divide-y divide-sage-50">
+            {logs.slice(0, 20).map(l => (
+              <div key={l.id} className="flex items-center justify-between gap-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-sage-700 truncate">{l.subject}</p>
+                  <p className="text-[11px] text-sage-400 truncate">{l.to} · {new Date(l.createdAt).toLocaleString()}</p>
+                </div>
+                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 ${TX_STATUS_STYLE[l.status]}`}>{l.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── API Keys tab ─────────────────────────────────────────────────────────────
 
 function ApiTab() {
@@ -588,6 +666,8 @@ function ApiTab() {
           <p className="text-[11px] text-amber-700 mt-0.5">Never commit keys to version control or share them publicly. Full keys are shown only once on creation and cannot be recovered.</p>
         </div>
       </div>
+
+      <TransactionalApiSection />
 
       {deleteTarget !== null && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={e => e.target === e.currentTarget && setDeleteTarget(null)}>

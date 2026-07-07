@@ -2357,6 +2357,91 @@ settR.delete('/api-keys/:id', async (req, res) => {
 app.use('/api/settings', settR)
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TRANSACTIONAL EMAIL API — lets external code (a signup form, checkout flow,
+// password-reset handler, etc.) send a single email outside the campaign or
+// automation flow, authenticated by a workspace API key (managed under
+// Settings) rather than a logged-in session. Mirrors Brevo's transactional
+// email API in shape: POST to send, GET to see recent send history.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function requireApiKey(req, res, next) {
+  const provided = req.header('api-key') || (req.header('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!provided) return res.status(401).json({ error: 'Missing API key. Pass it in the "api-key" header.' })
+  const keyHash = crypto.createHash('sha256').update(provided).digest('hex')
+  const key = (db.data.apiKeys || []).find(k => k.keyHash === keyHash)
+  if (!key) return res.status(401).json({ error: 'Invalid API key.' })
+  const workspace = db.data.workspaces.find(w => w.id === key.workspaceId)
+  if (!workspace) return res.status(401).json({ error: 'The workspace for this API key no longer exists.' })
+  key.lastUsedAt = new Date().toISOString()
+  req.workspace = workspace
+  req.apiKey = key
+  next()
+}
+
+const txR = express.Router()
+txR.use(requireApiKey, requirePlanActive)
+
+txR.post('/send', async (req, res) => {
+  const { to, subject, htmlBody, text, fromAccountId, replyTo } = req.body
+  if (!to || !subject || !(htmlBody || text))
+    return res.status(400).json({ error: 'to, subject, and htmlBody (or text) are required.' })
+  const limitErr = checkEmailLimit(1, req.workspace.id, req.planInfo)
+  if (limitErr) return res.status(403).json(limitErr)
+
+  const accounts = db.data.emailAccounts.filter(a => a.workspaceId === req.workspace.id)
+  const account = (fromAccountId ? accounts.find(a => a.id === fromAccountId) : null)
+    || accounts.find(a => a.status === 'connected') || accounts[0]
+  if (!account) return res.status(400).json({ error: 'No email account configured for this workspace.' })
+  if (!account.smtpPass) return res.status(400).json({ error: 'SMTP password missing on the selected sending account.' })
+
+  const log = {
+    id: nextId('transactionalEmails'), workspaceId: req.workspace.id, apiKeyId: req.apiKey.id,
+    to, subject, status: 'pending', error: null, createdAt: new Date().toISOString(), sentAt: null,
+  }
+  db.data.transactionalEmails.push(log)
+  await db.write()
+
+  try {
+    const transport = makeTransport(account)
+    await transport.sendMail({
+      from: `"${account.fromName || account.name}" <${account.email}>`,
+      to, replyTo: replyTo || undefined, subject,
+      html: htmlBody || undefined, text: text || undefined,
+    })
+    log.status = 'sent'; log.sentAt = new Date().toISOString()
+    account.sentToday = (account.sentToday || 0) + 1
+    account.totalSent = (account.totalSent || 0) + 1
+  } catch (e) {
+    log.status = 'failed'; log.error = e.message
+  }
+  await db.write()
+  res.status(log.status === 'sent' ? 200 : 502).json({ id: log.id, status: log.status, error: log.error })
+})
+
+txR.get('/logs', (req, res) => {
+  const logs = (db.data.transactionalEmails || [])
+    .filter(l => l.workspaceId === req.workspace.id)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 200)
+  res.json(logs)
+})
+
+app.use('/api/v1', txR)
+
+// Session-authenticated mirror of the log endpoint above, so the Settings UI
+// can show recent transactional sends without needing an API key of its own.
+const txLogR = express.Router()
+txLogR.use(requireAuth, requireWorkspace)
+txLogR.get('/', (req, res) => {
+  const logs = (db.data.transactionalEmails || [])
+    .filter(l => l.workspaceId === req.workspace.id)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 200)
+  res.json(logs)
+})
+app.use('/api/transactional-logs', txLogR)
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // NOTIFICATIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2536,6 +2621,7 @@ async function startup() {
     forms:                [],
     landingPages:         [],
     segments:             [],
+    transactionalEmails:  [],
     ...db.data,
   }
 

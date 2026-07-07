@@ -129,3 +129,11 @@ CREATE TABLE IF NOT EXISTS segments (
   data JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS segments_workspace_idx ON segments (((data->>'workspaceId')::int));
+
+-- Transactional email API: a log of single emails sent via /api/v1/send
+-- (API-key authenticated, outside the campaign/automation flow).
+CREATE TABLE IF NOT EXISTS transactional_emails (
+  id   INTEGER PRIMARY KEY,
+  data JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS transactional_emails_workspace_idx ON transactional_emails (((data->>'workspaceId')::int));
