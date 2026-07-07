@@ -5,6 +5,7 @@ import {
   Mail, Zap, User, Info, CreditCard,
   X, CheckCheck, AlertTriangle,
   Settings, ArrowUpRight, LogOut, Users,
+  FileText, Filter, Globe, Loader2,
 } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { apiFetch } from '../../lib/api'
@@ -21,6 +22,16 @@ interface Notification {
   createdAt: string
   read: boolean
   action?: { label: string; href: string } | null
+}
+
+type SearchResultType = 'contact' | 'campaign' | 'template' | 'automation' | 'segment' | 'form' | 'landing-page' | 'account'
+
+interface SearchResult {
+  type: SearchResultType
+  id: number
+  label: string
+  sublabel: string
+  href: string
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -213,6 +224,17 @@ function NotificationsPanel({
   )
 }
 
+const SEARCH_TYPE_CFG: Record<SearchResultType, { Icon: React.FC<{ className?: string }>; label: string }> = {
+  contact:       { Icon: User,     label: 'Contact' },
+  campaign:      { Icon: Mail,     label: 'Campaign' },
+  template:      { Icon: FileText, label: 'Template' },
+  automation:    { Icon: Zap,      label: 'Automation' },
+  segment:       { Icon: Filter,   label: 'Segment' },
+  form:          { Icon: FileText, label: 'Form' },
+  'landing-page': { Icon: Globe,   label: 'Landing page' },
+  account:       { Icon: Mail,     label: 'Email account' },
+}
+
 // ─── TopBar ───────────────────────────────────────────────────────────────────
 
 export default function TopBar() {
@@ -225,6 +247,78 @@ export default function TopBar() {
   const [pendingInvites, setPendingInvites] = useState(0)
   const bellRef = useRef<HTMLDivElement>(null)
   const userRef = useRef<HTMLDivElement>(null)
+
+  const [referralOpen, setReferralOpen] = useState(false)
+  const [referral, setReferral] = useState<{ code: string; link: string; bonusDays: number; referredCount: number; bonusDaysEarned: number } | null>(null)
+  const [referralLoading, setReferralLoading] = useState(false)
+  const [referralCopied, setReferralCopied] = useState(false)
+  const referralRef = useRef<HTMLDivElement>(null)
+
+  function toggleReferral() {
+    setReferralOpen(v => {
+      const next = !v
+      if (next && !referral) {
+        setReferralLoading(true)
+        apiFetch<typeof referral>('/api/referral').then(setReferral).catch(() => {}).finally(() => setReferralLoading(false))
+      }
+      return next
+    })
+    setPanelOpen(false); setUserMenuOpen(false)
+  }
+
+  function copyReferralLink() {
+    if (!referral) return
+    navigator.clipboard.writeText(referral.link)
+    setReferralCopied(true)
+    setTimeout(() => setReferralCopied(false), 2000)
+  }
+
+  const [searchQuery,   setSearchQuery]   = useState('')
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchOpen,    setSearchOpen]    = useState(false)
+  const [activeIndex,   setActiveIndex]   = useState(0)
+  const searchRef  = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // ⌘K / Ctrl+K focuses search from anywhere in the app
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Debounced search
+  useEffect(() => {
+    const q = searchQuery.trim()
+    if (q.length < 2) { setSearchResults([]); setSearchLoading(false); return }
+    setSearchLoading(true)
+    const t = setTimeout(() => {
+      apiFetch<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`)
+        .then(r => { setSearchResults(r); setActiveIndex(0) })
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearchLoading(false))
+    }, 250)
+    return () => clearTimeout(t)
+  }, [searchQuery])
+
+  function selectResult(r: SearchResult) {
+    setSearchOpen(false); setSearchQuery(''); setSearchResults([])
+    navigate(r.href)
+  }
+
+  function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!searchOpen || searchResults.length === 0) return
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIndex(i => Math.min(i + 1, searchResults.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIndex(i => Math.max(i - 1, 0)) }
+    else if (e.key === 'Enter') { e.preventDefault(); selectResult(searchResults[activeIndex]) }
+    else if (e.key === 'Escape') { searchInputRef.current?.blur(); setSearchOpen(false) }
+  }
 
   const unreadCount = notifications.filter(n => !n.read).length
   const initials    = (user?.name || 'U').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
@@ -248,7 +342,7 @@ export default function TopBar() {
 
   // Close panels on click-outside
   useEffect(() => {
-    if (!panelOpen && !userMenuOpen) return
+    if (!panelOpen && !userMenuOpen && !searchOpen && !referralOpen) return
     function onMouseDown(e: MouseEvent) {
       if (panelOpen && bellRef.current && !bellRef.current.contains(e.target as Node)) {
         setPanelOpen(false)
@@ -256,10 +350,16 @@ export default function TopBar() {
       if (userMenuOpen && userRef.current && !userRef.current.contains(e.target as Node)) {
         setUserMenuOpen(false)
       }
+      if (searchOpen && searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchOpen(false)
+      }
+      if (referralOpen && referralRef.current && !referralRef.current.contains(e.target as Node)) {
+        setReferralOpen(false)
+      }
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [panelOpen, userMenuOpen])
+  }, [panelOpen, userMenuOpen, searchOpen, referralOpen])
 
   function markRead(id: number) {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
@@ -285,19 +385,67 @@ export default function TopBar() {
   return (
     <header className="h-[60px] bg-white border-b border-sage-100 flex items-center justify-between px-6 shrink-0">
       {/* Search */}
-      <div className="relative w-[280px]">
+      <div ref={searchRef} className="relative w-[280px]">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sage-400" />
         <input
+          ref={searchInputRef}
           type="text"
           placeholder="Search..."
+          value={searchQuery}
+          onChange={e => { setSearchQuery(e.target.value); setSearchOpen(true) }}
+          onFocus={() => setSearchOpen(true)}
+          onKeyDown={onSearchKeyDown}
           className="w-full pl-9 pr-4 py-2 text-sm bg-sage-50 border border-sage-100 rounded-lg
                      placeholder:text-sage-400 text-sage-800 focus:outline-none focus:ring-2
                      focus:ring-forest/15 focus:border-forest/30 transition-colors"
         />
-        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
-          <kbd className="text-[9px] text-sage-400 bg-sage-100 border border-sage-200 rounded px-1 py-0.5 font-mono">⌘</kbd>
-          <kbd className="text-[9px] text-sage-400 bg-sage-100 border border-sage-200 rounded px-1 py-0.5 font-mono">K</kbd>
-        </div>
+        {!searchQuery && (
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pointer-events-none">
+            <kbd className="text-[9px] text-sage-400 bg-sage-100 border border-sage-200 rounded px-1 py-0.5 font-mono">⌘</kbd>
+            <kbd className="text-[9px] text-sage-400 bg-sage-100 border border-sage-200 rounded px-1 py-0.5 font-mono">K</kbd>
+          </div>
+        )}
+        {searchQuery && (
+          <button
+            onClick={() => { setSearchQuery(''); setSearchResults([]); searchInputRef.current?.focus() }}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-sage-200 text-sage-400 hover:text-sage-600"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
+
+        {searchOpen && searchQuery.trim().length >= 2 && (
+          <div className="absolute left-0 top-[calc(100%+8px)] w-[360px] bg-white rounded-xl shadow-xl border border-sage-100 z-50 overflow-hidden">
+            {searchLoading ? (
+              <div className="flex items-center gap-2 px-4 py-4 text-xs text-sage-400">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />Searching…
+              </div>
+            ) : searchResults.length === 0 ? (
+              <div className="px-4 py-4 text-xs text-sage-400">No results for "{searchQuery}"</div>
+            ) : (
+              <div className="max-h-80 overflow-y-auto py-1.5">
+                {searchResults.map((r, i) => {
+                  const cfg = SEARCH_TYPE_CFG[r.type]
+                  return (
+                    <button
+                      key={`${r.type}-${r.id}`}
+                      onMouseEnter={() => setActiveIndex(i)}
+                      onClick={() => selectResult(r)}
+                      className={`w-full flex items-center gap-2.5 px-4 py-2 text-left transition-colors ${i === activeIndex ? 'bg-forest/[0.06]' : 'hover:bg-sage-50'}`}
+                    >
+                      <cfg.Icon className="w-3.5 h-3.5 text-sage-400 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-sage-800 truncate">{r.label}</p>
+                        <p className="text-[10px] text-sage-400 truncate">{r.sublabel}</p>
+                      </div>
+                      <span className="text-[9px] text-sage-400 shrink-0">{cfg.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Right side */}
@@ -311,9 +459,56 @@ export default function TopBar() {
             {pendingInvites} invite{pendingInvites !== 1 ? 's' : ''}
           </button>
         )}
-        <button className="w-8 h-8 rounded-lg hover:bg-sage-50 flex items-center justify-center transition-colors group">
-          <Gift className="w-4 h-4 text-sage-500 group-hover:text-sage-700" />
-        </button>
+        <div ref={referralRef} className="relative">
+          <button
+            onClick={toggleReferral}
+            title="Refer a friend"
+            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors group
+              ${referralOpen ? 'bg-forest/10' : 'hover:bg-sage-50'}`}
+          >
+            <Gift className={`w-4 h-4 transition-colors ${referralOpen ? 'text-forest' : 'text-sage-500 group-hover:text-sage-700'}`} />
+          </button>
+
+          {referralOpen && (
+            <div className="absolute right-0 top-[calc(100%+8px)] w-[340px] bg-white rounded-xl shadow-xl border border-sage-100 z-50 overflow-hidden">
+              <div className="p-4 border-b border-sage-100">
+                <div className="flex items-center gap-2">
+                  <Gift className="w-4 h-4 text-forest" />
+                  <span className="text-sm font-semibold text-sage-900">Refer a friend</span>
+                </div>
+                <p className="text-[11px] text-sage-500 mt-1">
+                  Share your link — you both get {referral?.bonusDays ?? 7} bonus trial days when they sign up.
+                </p>
+              </div>
+              <div className="p-4 space-y-3">
+                {referralLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-sage-400 py-2"><Loader2 className="w-3.5 h-3.5 animate-spin" />Loading…</div>
+                ) : referral ? (
+                  <>
+                    <div className="flex items-center gap-2 bg-sage-50 border border-sage-100 rounded-lg px-3 py-2">
+                      <code className="text-[11px] text-sage-700 flex-1 truncate">{referral.link}</code>
+                      <button onClick={copyReferralLink} className="text-sage-400 hover:text-forest shrink-0 transition-colors">
+                        {referralCopied ? <CheckCheck className="w-3.5 h-3.5 text-green-500" /> : <Users className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-sage-50 rounded-lg px-3 py-2 text-center">
+                        <p className="text-base font-bold text-forest">{referral.referredCount}</p>
+                        <p className="text-[10px] text-sage-500">Referred</p>
+                      </div>
+                      <div className="bg-sage-50 rounded-lg px-3 py-2 text-center">
+                        <p className="text-base font-bold text-forest">{referral.bonusDaysEarned}</p>
+                        <p className="text-[10px] text-sage-500">Bonus days earned</p>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-sage-400 py-2">Couldn't load your referral link. Try again.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Bell + panel */}
         <div ref={bellRef} className="relative">

@@ -137,3 +137,11 @@ CREATE TABLE IF NOT EXISTS transactional_emails (
   data JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS transactional_emails_workspace_idx ON transactional_emails (((data->>'workspaceId')::int));
+
+-- Referral program: records a bonus-trial-days grant each time a workspace's
+-- referral code is used at signup.
+CREATE TABLE IF NOT EXISTS referrals (
+  id   INTEGER PRIMARY KEY,
+  data JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON referrals (((data->>'referrerWorkspaceId')::int));

@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, TrendingUp, TrendingDown, ArrowRight, MoreHorizontal, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
@@ -51,13 +52,18 @@ function UpcomingItem({ item }: { item: Overview['upcoming'][number] }) {
   )
 }
 
-// Generate week calendar
-function getWeekDays() {
+// Generate week calendar, offset in whole weeks from the current one
+function getWeekDays(weekOffset: number) {
   const today = new Date()
-  const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7))
+  const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) + weekOffset * 7)
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday); d.setDate(monday.getDate() + i)
-    return { day: d.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 3), date: d.getDate(), isToday: d.toDateString() === today.toDateString() }
+    return {
+      day: d.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 3),
+      date: d.getDate(),
+      isToday: d.toDateString() === today.toDateString(),
+      key: d.toDateString(),
+    }
   })
 }
 
@@ -65,7 +71,19 @@ export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const { data, loading } = useData<Overview>('/api/stats/overview')
-  const weekDays = getWeekDays()
+  const [weekOffset, setWeekOffset] = useState(0)
+  const [selectedDay, setSelectedDay] = useState<string | null>(null)
+  const weekDays = useMemo(() => getWeekDays(weekOffset), [weekOffset])
+  const monthLabel = useMemo(() => {
+    const mid = new Date(); mid.setDate(mid.getDate() - ((mid.getDay() + 6) % 7) + weekOffset * 7 + 3)
+    return mid.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  }, [weekOffset])
+
+  const upcomingFiltered = useMemo(() => {
+    const all = data?.upcoming || []
+    if (!selectedDay) return all
+    return all.filter(item => new Date(item.scheduledAt).toDateString() === selectedDay)
+  }, [data?.upcoming, selectedDay])
 
   const totals = data?.totals
   const chart  = data?.chart || []
@@ -185,24 +203,37 @@ export default function Dashboard() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="section-title">Scheduled</h2>
             <div className="flex items-center gap-1">
-              <button className="w-6 h-6 rounded-md hover:bg-sage-100 flex items-center justify-center">
+              <button
+                onClick={() => { setWeekOffset(w => w - 1); setSelectedDay(null) }}
+                className="w-6 h-6 rounded-md hover:bg-sage-100 flex items-center justify-center"
+              >
                 <ChevronLeft className="w-3.5 h-3.5 text-sage-500" />
               </button>
-              <button className="w-6 h-6 rounded-md hover:bg-sage-100 flex items-center justify-center">
+              <button
+                onClick={() => { setWeekOffset(w => w + 1); setSelectedDay(null) }}
+                className="w-6 h-6 rounded-md hover:bg-sage-100 flex items-center justify-center"
+              >
                 <ChevronRight className="w-3.5 h-3.5 text-sage-500" />
               </button>
             </div>
           </div>
 
           <p className="text-xs font-semibold text-sage-500 mb-3">
-            {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            {monthLabel}
           </p>
 
           <div className="grid grid-cols-7 mb-4">
-            {weekDays.map(({ day, date, isToday }) => (
-              <div key={date} className="flex flex-col items-center gap-1.5">
+            {weekDays.map(({ day, date, isToday, key }) => (
+              <div key={key} className="flex flex-col items-center gap-1.5">
                 <span className="text-[10px] text-sage-400 font-medium">{day}</span>
-                <button className={`w-7 h-7 rounded-full text-xs font-medium transition-colors ${isToday ? 'bg-forest text-white' : 'text-sage-700 hover:bg-sage-100'}`}>
+                <button
+                  onClick={() => setSelectedDay(d => d === key ? null : key)}
+                  className={`w-7 h-7 rounded-full text-xs font-medium transition-colors ${
+                    selectedDay === key ? 'bg-forest text-white ring-2 ring-forest/30 ring-offset-1'
+                    : isToday ? 'bg-forest text-white'
+                    : 'text-sage-700 hover:bg-sage-100'
+                  }`}
+                >
                   {date}
                 </button>
               </div>
@@ -212,17 +243,25 @@ export default function Dashboard() {
           <div className="divider" />
 
           <div className="space-y-2.5">
-            {(data?.upcoming || []).length === 0 ? (
+            {selectedDay && (
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-semibold text-sage-400 uppercase tracking-wider">
+                  {new Date(selectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                </p>
+                <button className="text-[10px] text-forest hover:underline" onClick={() => setSelectedDay(null)}>Show all</button>
+              </div>
+            )}
+            {upcomingFiltered.length === 0 ? (
               <div className="text-center py-6">
-                <p className="text-sm text-sage-400">No scheduled campaigns</p>
+                <p className="text-sm text-sage-400">{selectedDay ? 'Nothing scheduled this day' : 'No scheduled campaigns'}</p>
                 <button className="text-xs text-forest hover:underline mt-1" onClick={() => navigate('/campaigns/new')}>
                   Schedule one now
                 </button>
               </div>
             ) : (
               <>
-                <p className="text-[10px] font-semibold text-sage-400 uppercase tracking-wider">Upcoming</p>
-                {(data?.upcoming || []).map(item => <UpcomingItem key={item.id} item={item} />)}
+                {!selectedDay && <p className="text-[10px] font-semibold text-sage-400 uppercase tracking-wider">Upcoming</p>}
+                {upcomingFiltered.map(item => <UpcomingItem key={item.id} item={item} />)}
               </>
             )}
           </div>

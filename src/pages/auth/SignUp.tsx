@@ -155,11 +155,12 @@ export default function SignUp() {
     setLoading(true)
     setError('')
     try {
+      const ref = new URLSearchParams(window.location.search).get('ref') || undefined
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ name: form.name.trim(), company: form.company.trim(), email: form.email.trim(), password: form.password }),
+        body: JSON.stringify({ name: form.name.trim(), company: form.company.trim(), email: form.email.trim(), password: form.password, ref }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error || 'Registration failed.'); setLoading(false); return }

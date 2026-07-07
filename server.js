@@ -212,7 +212,8 @@ function getWorkspacePlan(workspace) {
   const plan = PLANS[key] || PLANS.free_trial
   if (key === 'free_trial') {
     const start    = new Date(workspace.trialStartedAt || workspace.createdAt || Date.now())
-    const end      = new Date(start.getTime() + plan.trialDays * 86400000)
+    const totalDays = plan.trialDays + (workspace.bonusTrialDays || 0)
+    const end      = new Date(start.getTime() + totalDays * 86400000)
     const expired  = Date.now() > end.getTime()
     const daysLeft = Math.max(0, Math.ceil((end.getTime() - Date.now()) / 86400000))
     return { ...plan, expired, trialEnd: end.toISOString(), daysLeft }
@@ -273,6 +274,7 @@ function createWorkspaceForUser(user, name) {
   const workspace = {
     id: nextId('workspaces'), name, ownerId: user.id,
     plan: 'free_trial', trialStartedAt: now, billingCycleStart: now, createdAt: now,
+    bonusTrialDays: 0, referralCode: null,
   }
   db.data.workspaces.push(workspace)
   db.data.workspaceMembers.push({
@@ -281,6 +283,17 @@ function createWorkspaceForUser(user, name) {
   })
   user.activeWorkspaceId = workspace.id
   return workspace
+}
+
+// Referral program: both sides get bonus free-trial days. Codes are generated
+// lazily (first time a workspace's referral link is actually requested)
+// rather than at workspace-creation time, since most workspaces never look.
+const REFERRAL_BONUS_DAYS = 7
+
+function getOrCreateReferralCode(workspace) {
+  if (workspace.referralCode) return workspace.referralCode
+  workspace.referralCode = crypto.randomBytes(4).toString('hex')
+  return workspace.referralCode
 }
 
 function requirePlanActive(req, res, next) {
@@ -433,7 +446,7 @@ authR.post('/reset-password', async (req, res) => {
 authR.post('/register', async (req, res) => {
   if (checkRegisterLimit(req.ip || 'unknown'))
     return res.status(429).json({ error: 'Too many registrations from this address. Try again later.' })
-  const { name, email, password, company } = req.body
+  const { name, email, password, company, ref } = req.body
   if (!name || !email || !password)
     return res.status(400).json({ error: 'name, email, and password are required.' })
   if (typeof name !== 'string' || name.trim().length > 100)
@@ -450,7 +463,27 @@ authR.post('/register', async (req, res) => {
     passwordHash, role: 'user', createdAt: now, emailVerified: false,
   }
   db.data.users.push(user)
-  createWorkspaceForUser(user, `${name.trim()}'s Workspace`)
+  const newWorkspace = createWorkspaceForUser(user, `${name.trim()}'s Workspace`)
+
+  // Referral reward: both the new workspace and whoever referred them get
+  // bonus trial days. Silently ignored if the code doesn't match anything —
+  // an invalid ref shouldn't block registration.
+  if (ref && typeof ref === 'string') {
+    const referrerWorkspace = db.data.workspaces.find(w => w.referralCode === ref)
+    if (referrerWorkspace) {
+      referrerWorkspace.bonusTrialDays = (referrerWorkspace.bonusTrialDays || 0) + REFERRAL_BONUS_DAYS
+      newWorkspace.bonusTrialDays = (newWorkspace.bonusTrialDays || 0) + REFERRAL_BONUS_DAYS
+      db.data.referrals.push({
+        id: nextId('referrals'), referrerWorkspaceId: referrerWorkspace.id,
+        referredWorkspaceId: newWorkspace.id, referredEmail: user.email,
+        bonusDays: REFERRAL_BONUS_DAYS, createdAt: now,
+      })
+      pushNotif(referrerWorkspace.id, 'system', 'Referral bonus earned!',
+        `${user.name} signed up using your referral link — you both got ${REFERRAL_BONUS_DAYS} bonus trial days.`,
+        { label: 'View referrals', href: '/settings' }
+      )
+    }
+  }
   // Generate and store verification token
   const token = crypto.randomBytes(32).toString('hex')
   db.data.verificationTokens = (db.data.verificationTokens || []).filter(t => t.userId !== user.id)
@@ -1954,6 +1987,26 @@ async function syncAccount(account) {
   return { added }
 }
 
+// Ticks every 60s (see startup()) syncing every connected email account's
+// INBOX across every workspace, so replies show up — and trigger a
+// notification via syncAccount() — without anyone having to open the inbox
+// and hit "sync" manually. Guarded against overlap since a full pass across
+// many accounts can take longer than the tick interval.
+let inboxSyncRunning = false
+async function processInboxSync() {
+  if (inboxSyncRunning) return
+  inboxSyncRunning = true
+  try {
+    const accounts = db.data.emailAccounts.filter(a => a.imapHost || a.smtpHost)
+    for (const account of accounts) {
+      try { await syncAccount(account) }
+      catch (e) { console.error(`IMAP auto-sync failed for ${account.email}:`, e.message) }
+    }
+  } finally {
+    inboxSyncRunning = false
+  }
+}
+
 // GET /api/inbox/threads
 inboxR.get('/threads', (req, res) => {
   const { folder='inbox', accountId, search='' } = req.query
@@ -2107,6 +2160,62 @@ inboxR.post('/sync', async (req, res) => {
 app.use('/api/inbox', inboxR)
 
 app.use('/api/stats', statsR)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GLOBAL SEARCH — powers the ⌘K box in the top bar; a light substring match
+// across the handful of entity types worth jumping straight to, not a full
+// text-search engine.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const searchR = express.Router()
+searchR.use(requireAuth, requireWorkspace)
+
+searchR.get('/', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase()
+  if (!q || q.length < 2) return res.json([])
+  const wsId = req.workspace.id
+  const LIMIT = 5
+  const results = []
+
+  db.data.contacts.filter(c => c.workspaceId === wsId &&
+    (`${c.firstName} ${c.lastName} ${c.email} ${c.company||''}`.toLowerCase().includes(q)))
+    .slice(0, LIMIT)
+    .forEach(c => results.push({ type: 'contact', id: c.id, label: `${c.firstName} ${c.lastName}`.trim() || c.email, sublabel: c.email, href: '/contacts' }))
+
+  db.data.campaigns.filter(c => c.workspaceId === wsId &&
+    (`${c.name} ${c.subject||''}`.toLowerCase().includes(q)))
+    .slice(0, LIMIT)
+    .forEach(c => results.push({ type: 'campaign', id: c.id, label: c.name, sublabel: c.subject || c.status, href: `/campaigns/${c.id}/edit` }))
+
+  db.data.templates.filter(t => t.workspaceId === wsId && t.name?.toLowerCase().includes(q))
+    .slice(0, LIMIT)
+    .forEach(t => results.push({ type: 'template', id: t.id, label: t.name, sublabel: 'Template', href: '/templates' }))
+
+  db.data.automations.filter(a => a.workspaceId === wsId && a.name?.toLowerCase().includes(q))
+    .slice(0, LIMIT)
+    .forEach(a => results.push({ type: 'automation', id: a.id, label: a.name, sublabel: 'Automation', href: '/automation' }))
+
+  ;(db.data.segments || []).filter(s => s.workspaceId === wsId && s.name?.toLowerCase().includes(q))
+    .slice(0, LIMIT)
+    .forEach(s => results.push({ type: 'segment', id: s.id, label: s.name, sublabel: 'Segment', href: '/segments' }))
+
+  ;(db.data.forms || []).filter(f => f.workspaceId === wsId && f.name?.toLowerCase().includes(q))
+    .slice(0, LIMIT)
+    .forEach(f => results.push({ type: 'form', id: f.id, label: f.name, sublabel: 'Form', href: '/forms' }))
+
+  ;(db.data.landingPages || []).filter(p => p.workspaceId === wsId && p.name?.toLowerCase().includes(q))
+    .slice(0, LIMIT)
+    .forEach(p => results.push({ type: 'landing-page', id: p.id, label: p.name, sublabel: 'Landing page', href: '/forms' }))
+
+  db.data.emailAccounts.filter(a => a.workspaceId === wsId && (`${a.name} ${a.email}`.toLowerCase().includes(q)))
+    .slice(0, LIMIT)
+    .forEach(a => results.push({ type: 'account', id: a.id, label: a.name, sublabel: a.email, href: '/accounts' }))
+
+  res.json(results.slice(0, 30))
+})
+
+app.use('/api/search', searchR)
+
 app.get('/api/health', (_,res)=>res.json({ ok:true }))
 app.get('/api/debug-db-error', (_,res)=>res.json({ dbInitError }))
 
@@ -2571,6 +2680,30 @@ billingR.post('/admin/set-plan', async (req, res) => {
 
 app.use('/api/billing', billingR)
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// REFERRAL PROGRAM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const referralR = express.Router()
+referralR.use(requireAuth, requireWorkspace)
+
+referralR.get('/', async (req, res) => {
+  const ws = req.workspace
+  const codeAlreadyExisted = !!ws.referralCode
+  const code = getOrCreateReferralCode(ws)
+  if (!codeAlreadyExisted) await db.write()
+  const referrals = db.data.referrals.filter(r => r.referrerWorkspaceId === ws.id)
+  res.json({
+    code,
+    link: `${FRONTEND}/signup?ref=${code}`,
+    bonusDays: REFERRAL_BONUS_DAYS,
+    referredCount: referrals.length,
+    bonusDaysEarned: referrals.reduce((sum, r) => sum + r.bonusDays, 0),
+  })
+})
+
+app.use('/api/referral', referralR)
+
 // ─── Serve built frontend in production ───────────────────────────────────────
 if (process.env.NODE_ENV === 'production') {
   const distPath = join(__dirname, 'dist')
@@ -2622,6 +2755,7 @@ async function startup() {
     landingPages:         [],
     segments:             [],
     transactionalEmails:  [],
+    referrals:            [],
     ...db.data,
   }
 
@@ -2698,6 +2832,10 @@ async function startup() {
   // A/B test winner picker: same reasoning as above — must start after read().
   setInterval(() => processAbTests().catch(console.error), 60000)
   setTimeout(() => processAbTests().catch(console.error), 5000)
+
+  // Inbox auto-sync: same reasoning as above — must start after read().
+  setInterval(() => processInboxSync().catch(console.error), 60000)
+  setTimeout(() => processInboxSync().catch(console.error), 10000)
 }
 
 startup().catch(err => {

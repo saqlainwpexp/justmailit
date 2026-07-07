@@ -55,6 +55,7 @@ const TABLES = {
   landingPages:          'landing_pages',
   segments:              'segments',
   transactionalEmails:   'transactional_emails',
+  referrals:             'referrals',
 }
 
 const CHUNK_SIZE = 500 // rows per upsert/delete batch

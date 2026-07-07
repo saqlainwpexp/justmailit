@@ -193,12 +193,16 @@ export default function Sidebar() {
           </button>
         ) : (
           <>
-            <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
+              title="Go to dashboard"
+            >
               <div className="w-8 h-8 bg-forest rounded-lg flex items-center justify-center shrink-0">
                 <Mail className="w-4 h-4 text-white" />
               </div>
               <span className="text-[17px] font-semibold text-forest tracking-tight">justmailit</span>
-            </div>
+            </button>
             <button
               onClick={() => setCollapsed(true)}
               title="Collapse sidebar"
