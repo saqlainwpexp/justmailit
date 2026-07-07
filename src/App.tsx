@@ -11,6 +11,7 @@ import EmailAccounts from './pages/EmailAccounts'
 import Domains from './pages/Domains'
 import Templates from './pages/Templates'
 import Forms from './pages/Forms'
+import Segments from './pages/Segments'
 import Settings from './pages/Settings'
 import Pricing from './pages/Pricing'
 import AdminPanel from './pages/AdminPanel'
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="/automation" element={<Automation />} />
         <Route path="/inbox" element={<Inbox />} />
         <Route path="/contacts" element={<Contacts />} />
+        <Route path="/segments" element={<Segments />} />
         <Route path="/accounts" element={<EmailAccounts />} />
         <Route path="/domains" element={<Domains />} />
         <Route path="/templates" element={<Templates />} />

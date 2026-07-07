@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
-  LayoutDashboard, Send, Zap, Inbox, Users, Mail, Globe,
+  LayoutDashboard, Send, Zap, Inbox, Users, Mail, Globe, Filter,
   FileText, Settings, LogOut, PanelLeftClose, PanelLeftOpen, ChevronDown, Crown, Shield,
   Plus, Check, Loader2, Layout,
 } from 'lucide-react'
@@ -130,6 +130,7 @@ const navItems = [
   { to: '/automation', icon: Zap,             label: 'Automation'    },
   { to: '/inbox',      icon: Inbox,           label: 'Unified Inbox' },
   { to: '/contacts',   icon: Users,           label: 'Contacts'      },
+  { to: '/segments',   icon: Filter,          label: 'Segments'      },
   { to: '/accounts',   icon: Mail,            label: 'Email Accounts'},
   { to: '/domains',    icon: Globe,           label: 'Domains'       },
   { to: '/templates',  icon: FileText,        label: 'Templates'     },

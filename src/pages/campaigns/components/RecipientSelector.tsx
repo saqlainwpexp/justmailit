@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Users, Tag, Search, CheckCircle, Loader2 } from 'lucide-react'
+import { Users, Tag, Search, CheckCircle, Loader2, Filter } from 'lucide-react'
 import { cn } from '../../../lib/utils'
 
 interface ContactMini {
@@ -11,15 +11,18 @@ interface ContactMini {
   status: string
 }
 
+interface SegmentMini { id: number; name: string; count: number }
+
 interface Props {
   contacts: ContactMini[]
   allTags: string[]
+  segments: SegmentMini[]
   loading?: boolean
-  value: { type: 'all' | 'tags' | 'specific'; tags: string[]; contactIds: number[] }
+  value: { type: 'all' | 'tags' | 'specific' | 'segment'; tags: string[]; contactIds: number[]; segmentId: number | null }
   onChange: (v: Props['value']) => void
 }
 
-export default function RecipientSelector({ contacts, allTags, loading, value, onChange }: Props) {
+export default function RecipientSelector({ contacts, allTags, segments, loading, value, onChange }: Props) {
   const [search, setSearch] = useState('')
 
   const subscribed = contacts.filter(c => c.status === 'subscribed')
@@ -34,6 +37,8 @@ export default function RecipientSelector({ contacts, allTags, loading, value, o
       ? subscribed.length
       : value.type === 'tags'
       ? subscribed.filter(c => value.tags.some(t => c.tags.includes(t))).length
+      : value.type === 'segment'
+      ? segments.find(s => s.id === value.segmentId)?.count ?? 0
       : value.contactIds.length
 
   const toggleTag = (tag: string) => {
@@ -60,10 +65,11 @@ export default function RecipientSelector({ contacts, allTags, loading, value, o
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {[
           { type: 'all' as const,      icon: Users,  label: 'All contacts',      desc: loading ? 'Loading…' : `${subscribed.length} subscribed` },
           { type: 'tags' as const,     icon: Tag,    label: 'Filter by tag',     desc: 'Choose specific tags' },
+          { type: 'segment' as const,  icon: Filter, label: 'Saved segment',     desc: segments.length ? 'Live-filtered group' : 'No segments yet' },
           { type: 'specific' as const, icon: Search, label: 'Specific contacts', desc: 'Hand-pick contacts' },
         ].map(opt => (
           <button
@@ -111,6 +117,32 @@ export default function RecipientSelector({ contacts, allTags, loading, value, o
                   )}
                 >
                   {tag}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {value.type === 'segment' && (
+        <div className="space-y-3">
+          <p className="text-xs font-semibold text-sage-500">Choose a saved segment:</p>
+          {segments.length === 0 ? (
+            <p className="text-xs text-sage-400">No segments yet — create one from the Segments page, then come back here.</p>
+          ) : (
+            <div className="space-y-2">
+              {segments.map(s => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => onChange({ ...value, segmentId: s.id })}
+                  className={cn(
+                    'w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border-2 text-left transition-all',
+                    value.segmentId === s.id ? 'border-forest bg-forest/5' : 'border-sage-200 hover:border-sage-300 bg-white'
+                  )}
+                >
+                  <span className={cn('text-sm font-medium', value.segmentId === s.id ? 'text-forest' : 'text-sage-700')}>{s.name}</span>
+                  <span className="text-xs text-sage-400 shrink-0">{s.count} contact{s.count !== 1 ? 's' : ''}</span>
                 </button>
               ))}
             </div>

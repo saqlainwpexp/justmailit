@@ -121,3 +121,11 @@ CREATE TABLE IF NOT EXISTS landing_pages (
 );
 CREATE INDEX IF NOT EXISTS landing_pages_workspace_idx ON landing_pages (((data->>'workspaceId')::int));
 CREATE UNIQUE INDEX IF NOT EXISTS landing_pages_slug_idx ON landing_pages ((lower(data->>'slug')));
+
+-- Segments: saved dynamic contact filters (re-evaluated live against contacts
+-- + campaign_recipients on every read, not a materialized/snapshot list).
+CREATE TABLE IF NOT EXISTS segments (
+  id   INTEGER PRIMARY KEY,
+  data JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS segments_workspace_idx ON segments (((data->>'workspaceId')::int));

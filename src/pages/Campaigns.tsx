@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, Send, Clock, CheckCircle, XCircle, Eye, MousePointer,
-  Edit, Trash2, MoreHorizontal, Loader2, AlertCircle, X,
+  Edit, Trash2, MoreHorizontal, Loader2, AlertCircle, X, FlaskConical, Trophy,
 } from 'lucide-react'
 import { useData, apiFetch } from '../lib/api'
 import { formatNumber } from '../lib/utils'
@@ -12,11 +12,24 @@ interface CampaignStats {
   bounced: number; failed: number; openRate: number; clickRate: number
 }
 
+interface AbTestInfo {
+  enabled: boolean
+  variants: { id: 'a' | 'b'; subject: string }[]
+  testPercent: number
+  winnerMetric: 'openRate' | 'clickRate'
+  testDurationHours: number
+  testSentAt: string | null
+  winnerVariantId: 'a' | 'b' | null
+  winnerSentAt: string | null
+}
+
 interface Campaign {
   id: number; name: string; subject: string; status: string
   fromAccountId: number | null; fromName: string
   lists: string[]; tags: string[]; scheduledAt: string | null; sentAt: string | null
   createdAt: string; updatedAt: string; stats: CampaignStats
+  abTest?: AbTestInfo
+  variantStats?: { a: CampaignStats; b: CampaignStats }
 }
 
 const STATUS_CFG: Record<string, { label: string; icon: any; cls: string }> = {
@@ -24,6 +37,81 @@ const STATUS_CFG: Record<string, { label: string; icon: any; cls: string }> = {
   scheduled:{ label: 'Scheduled',icon: Clock,       cls: 'bg-amber-50 text-amber-700' },
   draft:    { label: 'Draft',    icon: XCircle,     cls: 'bg-sage-100 text-sage-500'  },
   sending:  { label: 'Sending…', icon: Loader2,     cls: 'bg-blue-50 text-blue-600'   },
+  testing:  { label: 'A/B Testing', icon: FlaskConical, cls: 'bg-purple-50 text-purple-600' },
+}
+
+function PickWinnerModal({ campaign, onDone, onClose }: { campaign: Campaign; onDone: () => void; onClose: () => void }) {
+  const [picking, setPicking] = useState<'a' | 'b' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const stats = campaign.variantStats
+
+  async function pick(variantId: 'a' | 'b') {
+    setPicking(variantId)
+    setError(null)
+    try {
+      await apiFetch(`/api/campaigns/${campaign.id}/pick-winner`, { method: 'POST', body: JSON.stringify({ variantId }) })
+      onDone()
+    } catch (e: any) {
+      setError(e.message)
+      setPicking(null)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+        <div className="flex items-center justify-between p-6 border-b border-sage-100">
+          <h3 className="font-semibold text-sage-900">Pick a winner early</h3>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-sage-100 flex items-center justify-center">
+            <X className="w-4 h-4 text-sage-400" />
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          <p className="text-xs text-sage-500">
+            The chosen variant's content will be sent to everyone who hasn't received the test email yet.
+            This can't be undone.
+          </p>
+          {error && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 text-xs text-red-700">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            {(['a', 'b'] as const).map(v => {
+              const s = stats?.[v]
+              const subject = campaign.abTest?.variants.find(x => x.id === v)?.subject
+              const metric = campaign.abTest?.winnerMetric || 'openRate'
+              return (
+                <button
+                  key={v}
+                  onClick={() => pick(v)}
+                  disabled={picking !== null}
+                  className="text-left border-2 border-sage-200 hover:border-forest rounded-xl p-4 transition-colors disabled:opacity-60"
+                >
+                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wider">Variant {v.toUpperCase()}</p>
+                  <p className="text-sm font-medium text-sage-800 mt-1 truncate">{subject || '—'}</p>
+                  <div className="flex items-center gap-3 mt-3 text-xs text-sage-500">
+                    <span>Open: <span className="font-semibold text-sage-800">{s?.openRate ?? 0}%</span></span>
+                    <span>Click: <span className="font-semibold text-sage-800">{s?.clickRate ?? 0}%</span></span>
+                  </div>
+                  <div className="mt-3">
+                    {picking === v ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-forest"><Loader2 className="w-3.5 h-3.5 animate-spin" />Sending…</span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-forest">
+                        <Trophy className="w-3.5 h-3.5" />Send {metric === 'openRate' ? '(higher opens)' : '(higher clicks)'}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function SendModal({ campaign, onDone, onClose }: { campaign: Campaign; onDone: () => void; onClose: () => void }) {
@@ -84,6 +172,7 @@ export default function Campaigns() {
 
   const [search,      setSearch]      = useState('')
   const [sendTarget,  setSendTarget]  = useState<Campaign | null>(null)
+  const [winnerTarget,setWinnerTarget]= useState<Campaign | null>(null)
   const [deleting,    setDeleting]    = useState<number | null>(null)
   const [menuOpen,    setMenuOpen]    = useState<number | null>(null)
 
@@ -177,8 +266,21 @@ export default function Campaigns() {
                 return (
                   <tr key={c.id} className="hover:bg-sage-50/50 transition-colors group">
                     <td className="px-6 py-4">
-                      <p className="text-sm font-medium text-forest">{c.name}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm font-medium text-forest">{c.name}</p>
+                        {c.abTest?.enabled && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
+                            <FlaskConical className="w-2.5 h-2.5" />A/B
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-sage-400 mt-0.5">{c.subject}</p>
+                      {c.abTest?.enabled && c.variantStats && (c.status === 'testing' || c.abTest.winnerVariantId) && (
+                        <p className="text-[11px] text-sage-400 mt-1">
+                          A: {c.variantStats.a[c.abTest.winnerMetric]}% · B: {c.variantStats.b[c.abTest.winnerMetric]}%
+                          {c.abTest.winnerVariantId && <span className="font-semibold text-purple-600"> — {c.abTest.winnerVariantId.toUpperCase()} won</span>}
+                        </p>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${cfg.cls}`}>
@@ -222,7 +324,15 @@ export default function Campaigns() {
                             <Send className="w-3 h-3" />Send
                           </button>
                         )}
-                        {c.status !== 'sent' && (
+                        {c.status === 'testing' && (
+                          <button
+                            onClick={() => setWinnerTarget(c)}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-purple-600 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg transition-colors"
+                          >
+                            <Trophy className="w-3 h-3" />Pick winner
+                          </button>
+                        )}
+                        {(c.status === 'draft' || c.status === 'scheduled') && (
                           <button onClick={() => navigate(`/campaigns/${c.id}/edit`)} className="w-7 h-7 rounded-lg hover:bg-sage-100 flex items-center justify-center">
                             <Edit className="w-3.5 h-3.5 text-sage-400" />
                           </button>
@@ -259,6 +369,14 @@ export default function Campaigns() {
           campaign={sendTarget}
           onDone={() => { setSendTarget(null); reload() }}
           onClose={() => setSendTarget(null)}
+        />
+      )}
+
+      {winnerTarget && (
+        <PickWinnerModal
+          campaign={winnerTarget}
+          onDone={() => { setWinnerTarget(null); reload() }}
+          onClose={() => setWinnerTarget(null)}
         />
       )}
     </div>

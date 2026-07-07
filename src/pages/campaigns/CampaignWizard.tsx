@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ArrowRight, CheckCircle, Mail, Users, Calendar,
-  Send, Eye, Clock, AlertCircle, Zap, ChevronDown, Loader2, XCircle,
+  Send, Eye, Clock, AlertCircle, Zap, ChevronDown, Loader2, XCircle, FlaskConical,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useData, apiFetch } from '../../lib/api'
@@ -35,6 +35,20 @@ interface ContactMini {
   status: string
 }
 
+interface AbVariant {
+  subject: string
+  previewText: string
+  bodyHtml: string
+}
+
+interface AbTestConfig {
+  enabled: boolean
+  variants: [AbVariant, AbVariant]
+  testPercent: number
+  winnerMetric: 'openRate' | 'clickRate'
+  testDurationHours: number
+}
+
 interface Campaign {
   name: string
   fromAccountId: number
@@ -44,7 +58,8 @@ interface Campaign {
   subject: string
   previewText: string
   bodyHtml: string
-  recipients: { type: 'all' | 'tags' | 'specific'; tags: string[]; contactIds: number[] }
+  abTest: AbTestConfig
+  recipients: { type: 'all' | 'tags' | 'specific' | 'segment'; tags: string[]; contactIds: number[]; segmentId: number | null }
   scheduleType: 'now' | 'scheduled'
   scheduledAt: string
 }
@@ -58,7 +73,17 @@ const DEFAULT: Campaign = {
   subject: '',
   previewText: '',
   bodyHtml: '',
-  recipients: { type: 'all', tags: [], contactIds: [] },
+  abTest: {
+    enabled: false,
+    variants: [
+      { subject: '', previewText: '', bodyHtml: '' },
+      { subject: '', previewText: '', bodyHtml: '' },
+    ],
+    testPercent: 20,
+    winnerMetric: 'openRate',
+    testDurationHours: 4,
+  },
+  recipients: { type: 'all', tags: [], contactIds: [], segmentId: null },
   scheduleType: 'now',
   scheduledAt: '',
 }
@@ -197,31 +222,24 @@ function StepDetails({
 }
 
 // ── Step 2: Email ──────────────────────────────────────────────────────────────
-function StepEmail({ c, set, onPreview }: { c: Campaign; set: (k: keyof Campaign, v: any) => void; onPreview: () => void }) {
-  const subjectLen = c.subject.length
+function SubjectPreviewBodyFields({
+  subject, previewText, bodyHtml, onSubject, onPreviewText, onBodyHtml,
+}: {
+  subject: string; previewText: string; bodyHtml: string
+  onSubject: (v: string) => void; onPreviewText: (v: string) => void; onBodyHtml: (v: string) => void
+}) {
+  const subjectLen = subject.length
   const subjectColor = subjectLen > 70 ? 'text-red-500' : subjectLen > 50 ? 'text-amber-500' : 'text-sage-400'
-
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-forest">Email content</h2>
-          <p className="text-sm text-sage-400 mt-0.5">Write your subject line and email body</p>
-        </div>
-        <button type="button" onClick={onPreview} className="btn-secondary text-xs">
-          <Eye className="w-4 h-4" />
-          Preview email
-        </button>
-      </div>
-
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="label">Subject line <span className="text-red-400">*</span></label>
           <input
             className="input"
             placeholder="Your email subject — make it count!"
-            value={c.subject}
-            onChange={e => set('subject', e.target.value)}
+            value={subject}
+            onChange={e => onSubject(e.target.value)}
           />
           <div className="flex items-center justify-between mt-1.5">
             <p className="text-xs text-sage-400">Use merge tags like {'{{first_name}}'} for personalisation</p>
@@ -233,30 +251,166 @@ function StepEmail({ c, set, onPreview }: { c: Campaign; set: (k: keyof Campaign
           <input
             className="input"
             placeholder="Short snippet shown below subject in inbox..."
-            value={c.previewText}
-            onChange={e => set('previewText', e.target.value)}
+            value={previewText}
+            onChange={e => onPreviewText(e.target.value)}
             maxLength={120}
           />
-          <p className="text-xs text-sage-400 mt-1.5">{c.previewText.length}/120 · shown below subject in inbox</p>
+          <p className="text-xs text-sage-400 mt-1.5">{previewText.length}/120 · shown below subject in inbox</p>
         </div>
       </div>
-
       <div>
         <label className="label">Email body <span className="text-red-400">*</span></label>
-        <EmailEditor value={c.bodyHtml} onChange={v => set('bodyHtml', v)} />
+        <EmailEditor value={bodyHtml} onChange={onBodyHtml} />
       </div>
+    </div>
+  )
+}
+
+function StepEmail({ c, set, onPreview }: { c: Campaign; set: (k: keyof Campaign, v: any) => void; onPreview: () => void }) {
+  const [variantTab, setVariantTab] = useState<0 | 1>(0)
+  const ab = c.abTest
+
+  const setVariant = (idx: 0 | 1, patch: Partial<AbVariant>) => {
+    const variants: [AbVariant, AbVariant] = [...ab.variants] as [AbVariant, AbVariant]
+    variants[idx] = { ...variants[idx], ...patch }
+    set('abTest', { ...ab, variants })
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-forest">Email content</h2>
+          <p className="text-sm text-sage-400 mt-0.5">Write your subject line and email body</p>
+        </div>
+        {!ab.enabled && (
+          <button type="button" onClick={onPreview} className="btn-secondary text-xs">
+            <Eye className="w-4 h-4" />
+            Preview email
+          </button>
+        )}
+      </div>
+
+      <div className="card !bg-sage-50 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0', ab.enabled ? 'bg-forest text-white' : 'bg-sage-200 text-sage-500')}>
+            <FlaskConical className="w-4.5 h-4.5" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-sage-800">A/B test this campaign</p>
+            <p className="text-xs text-sage-400 mt-0.5">Try two subjects/bodies on a sample of recipients, then auto-send the winner to everyone else</p>
+          </div>
+        </div>
+        <Toggle checked={ab.enabled} onChange={() => set('abTest', { ...ab, enabled: !ab.enabled })} label="" />
+      </div>
+
+      {!ab.enabled ? (
+        <SubjectPreviewBodyFields
+          subject={c.subject} previewText={c.previewText} bodyHtml={c.bodyHtml}
+          onSubject={v => set('subject', v)} onPreviewText={v => set('previewText', v)} onBodyHtml={v => set('bodyHtml', v)}
+        />
+      ) : (
+        <div className="space-y-5">
+          <div className="flex items-center gap-1 bg-sage-100 rounded-lg p-1 w-fit">
+            {(['Variant A', 'Variant B'] as const).map((label, idx) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setVariantTab(idx as 0 | 1)}
+                className={cn(
+                  'px-4 py-1.5 rounded-md text-xs font-semibold transition-all',
+                  variantTab === idx ? 'bg-white text-forest shadow-sm' : 'text-sage-500 hover:text-sage-700'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* key forces a fresh EmailEditor (tiptap) mount per variant — tiptap only
+              reads `value` as its *initial* content and never resyncs after mount,
+              so reusing one instance across tabs would leak variant A's content
+              into variant B when switching. */}
+          <SubjectPreviewBodyFields
+            key={variantTab}
+            subject={ab.variants[variantTab].subject}
+            previewText={ab.variants[variantTab].previewText}
+            bodyHtml={ab.variants[variantTab].bodyHtml}
+            onSubject={v => setVariant(variantTab, { subject: v })}
+            onPreviewText={v => setVariant(variantTab, { previewText: v })}
+            onBodyHtml={v => setVariant(variantTab, { bodyHtml: v })}
+          />
+
+          <div className="divider" />
+          <div className="space-y-4">
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wider">Test settings</p>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="label">Test sample size</label>
+                <div className="relative">
+                  <input
+                    type="number" min={10} max={100} step={5}
+                    className="input pr-8"
+                    value={ab.testPercent}
+                    onChange={e => set('abTest', { ...ab, testPercent: Math.min(100, Math.max(1, parseInt(e.target.value) || 0)) })}
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sage-400">%</span>
+                </div>
+                <p className="text-xs text-sage-400 mt-1.5">Split evenly between A and B</p>
+              </div>
+              <div>
+                <label className="label">Pick winner by</label>
+                <div className="relative">
+                  <select
+                    className="input appearance-none pr-9"
+                    value={ab.winnerMetric}
+                    onChange={e => set('abTest', { ...ab, winnerMetric: e.target.value as 'openRate' | 'clickRate' })}
+                  >
+                    <option value="openRate">Open rate</option>
+                    <option value="clickRate">Click rate</option>
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sage-400 pointer-events-none" />
+                </div>
+              </div>
+              <div>
+                <label className="label">Test duration</label>
+                <div className="relative">
+                  <input
+                    type="number" min={1} max={72}
+                    className="input pr-14"
+                    value={ab.testDurationHours}
+                    onChange={e => set('abTest', { ...ab, testDurationHours: Math.max(1, parseInt(e.target.value) || 0) })}
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sage-400">hours</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 flex items-start gap-2">
+              <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+              <p>
+                {ab.testPercent}% of recipients (split A/B) get the test emails first. After {ab.testDurationHours}h,
+                whichever variant has the higher {ab.winnerMetric === 'openRate' ? 'open rate' : 'click rate'} is
+                automatically sent to everyone else — or you can pick the winner early from the campaign's report page.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Step 3: Recipients ─────────────────────────────────────────────────────────
 function StepRecipients({
-  c, set, contacts, allTags, contactsLoading,
+  c, set, contacts, allTags, segments, contactsLoading,
 }: {
   c: Campaign
   set: (k: keyof Campaign, v: any) => void
   contacts: ContactMini[]
   allTags: string[]
+  segments: { id: number; name: string; count: number }[]
   contactsLoading: boolean
 }) {
   return (
@@ -268,6 +422,7 @@ function StepRecipients({
       <RecipientSelector
         contacts={contacts}
         allTags={allTags}
+        segments={segments}
         loading={contactsLoading}
         value={c.recipients}
         onChange={v => set('recipients', v)}
@@ -351,12 +506,17 @@ function StepReview({
   sendError: string | null
 }) {
   const fromAccount = accounts.find(a => a.id === c.fromAccountId)
+  const ab = c.abTest.enabled ? c.abTest : null
+  const bodyHasContent = (html: string) => html.replace(/<[^>]*>/g, '').trim().length > 0
+  const effectiveSubject = ab ? ab.variants.map(v => v.subject).join('  /  ') : c.subject
+  const effectiveBodyOk = ab ? ab.variants.every(v => bodyHasContent(v.bodyHtml)) : bodyHasContent(c.bodyHtml)
+  const effectiveBodyLen = ab ? ab.variants[0].bodyHtml.replace(/<[^>]*>/g, '').length : c.bodyHtml.replace(/<[^>]*>/g, '').length
 
   const checks = [
     { label: 'Campaign name', ok: c.name.length > 0,                                      value: c.name },
     { label: 'From account',  ok: fromAccount?.status === 'connected',                    value: fromAccount?.email || '(none selected)' },
-    { label: 'Subject line',  ok: c.subject.length > 0,                                   value: c.subject || '(missing)' },
-    { label: 'Email body',    ok: c.bodyHtml.replace(/<[^>]*>/g, '').trim().length > 0,   value: 'Content written' },
+    { label: ab ? 'Subject lines (A/B)' : 'Subject line', ok: ab ? ab.variants.every(v => v.subject.length > 0) : c.subject.length > 0, value: effectiveSubject || '(missing)' },
+    { label: 'Email body',    ok: effectiveBodyOk,                                        value: 'Content written' },
     { label: 'Recipients',    ok: estimatedRecipients > 0,                                 value: `~${estimatedRecipients} contacts` },
     { label: 'Send time',     ok: c.scheduleType === 'now' || !!c.scheduledAt,            value: c.scheduleType === 'now' ? 'Send immediately' : c.scheduledAt },
   ]
@@ -411,10 +571,16 @@ function StepReview({
           <div className="space-y-2">
             {[
               ['Recipients', `~${estimatedRecipients} contacts`],
-              ['Subject', c.subject || '—'],
+              ...(ab
+                ? [
+                    ['Subject A', ab.variants[0].subject || '—'],
+                    ['Subject B', ab.variants[1].subject || '—'],
+                    ['Test sample', `${ab.testPercent}% (split A/B)`],
+                    ['Winner picked by', `${ab.winnerMetric === 'openRate' ? 'Open rate' : 'Click rate'} after ${ab.testDurationHours}h`],
+                  ]
+                : [['Subject', c.subject || '—']]),
               ['When', c.scheduleType === 'now' ? 'Immediately' : c.scheduledAt || '—'],
-              ['Body length', `${c.bodyHtml.replace(/<[^>]*>/g, '').length} chars`],
-              ['Merge tags', c.subject.includes('{{') || c.bodyHtml.includes('{{') ? 'Yes' : 'None'],
+              ['Body length', `${effectiveBodyLen} chars`],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between text-xs">
                 <span className="text-sage-500">{k}</span>
@@ -424,6 +590,16 @@ function StepReview({
           </div>
         </div>
       </div>
+
+      {ab && (
+        <div className="flex items-center gap-2 bg-forest/5 border border-forest/20 rounded-xl px-4 py-3 text-xs text-forest">
+          <FlaskConical className="w-4 h-4 shrink-0" />
+          <span>
+            This is an A/B test — {ab.testPercent}% of recipients get variant A or B first, then the winner
+            (by {ab.winnerMetric === 'openRate' ? 'open rate' : 'click rate'}) is sent to everyone else after {ab.testDurationHours}h.
+          </span>
+        </div>
+      )}
 
       {sendError && (
         <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-xs text-red-700">
@@ -480,13 +656,15 @@ export default function CampaignWizard() {
   const [showPreview, setShowPreview] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
-  const [sentResult, setSentResult] = useState<{ count: number; scheduled: boolean } | null>(null)
+  const [sentResult, setSentResult] = useState<{ count: number; scheduled: boolean; message?: string } | null>(null)
 
   const { data: accountsRaw, loading: accountsLoading } = useData<Account[]>('/api/accounts')
   const { data: contactsRaw, loading: contactsLoading } = useData<{ contacts: ContactMini[]; total: number }>('/api/contacts?limit=1000')
+  const { data: segmentsRaw } = useData<{ id: number; name: string; count: number }[]>('/api/segments')
 
   const accounts = accountsRaw || []
   const contacts = contactsRaw?.contacts || []
+  const segments = segmentsRaw || []
   const allTags = useMemo(
     () => [...new Set(contacts.flatMap(c => c.tags || []))].sort(),
     [contacts]
@@ -507,14 +685,20 @@ export default function CampaignWizard() {
     if (campaign.recipients.type === 'all') return subscribed.length
     if (campaign.recipients.type === 'tags')
       return subscribed.filter(c => campaign.recipients.tags.some(t => (c.tags || []).includes(t))).length
+    if (campaign.recipients.type === 'segment')
+      return segments.find(s => s.id === campaign.recipients.segmentId)?.count ?? 0
     return campaign.recipients.contactIds.length
-  }, [contacts, campaign.recipients])
+  }, [contacts, campaign.recipients, segments])
+
+  const bodyHasContent = (html: string) => html.replace(/<[^>]*>/g, '').trim().length > 0
+  const abValid = campaign.abTest.variants.every(v => v.subject.length > 0 && bodyHasContent(v.bodyHtml))
 
   const canNext: Record<number, boolean> = {
     1: campaign.name.length > 0 && campaign.fromAccountId !== 0,
-    2: campaign.subject.length > 0 && campaign.bodyHtml.replace(/<[^>]*>/g, '').trim().length > 0,
+    2: campaign.abTest.enabled ? abValid : (campaign.subject.length > 0 && bodyHasContent(campaign.bodyHtml)),
     3: campaign.recipients.type === 'all' ||
        (campaign.recipients.type === 'tags' && campaign.recipients.tags.length > 0) ||
+       (campaign.recipients.type === 'segment' && campaign.recipients.segmentId !== null) ||
        (campaign.recipients.type === 'specific' && campaign.recipients.contactIds.length > 0),
     4: campaign.scheduleType === 'now' || !!campaign.scheduledAt,
     5: true,
@@ -534,15 +718,33 @@ export default function CampaignWizard() {
         replyTo:      campaign.replyTo || undefined,
         trackOpens:   campaign.trackOpens,
         trackClicks:  campaign.trackClicks,
-        subject:      campaign.subject,
-        previewText:  campaign.previewText,
-        htmlBody:     campaign.bodyHtml,  // server uses htmlBody
         scheduledAt:  campaign.scheduleType === 'scheduled' ? campaign.scheduledAt : null,
+      }
+
+      if (campaign.abTest.enabled) {
+        // Top-level subject/htmlBody mirror variant A so anything that reads
+        // them directly (e.g. the campaigns list preview) has sane content.
+        payload.subject = campaign.abTest.variants[0].subject
+        payload.previewText = campaign.abTest.variants[0].previewText
+        payload.htmlBody = campaign.abTest.variants[0].bodyHtml
+        payload.abTest = {
+          enabled: true,
+          variants: campaign.abTest.variants.map(v => ({ subject: v.subject, previewText: v.previewText, htmlBody: v.bodyHtml })),
+          testPercent: campaign.abTest.testPercent,
+          winnerMetric: campaign.abTest.winnerMetric,
+          testDurationHours: campaign.abTest.testDurationHours,
+        }
+      } else {
+        payload.subject = campaign.subject
+        payload.previewText = campaign.previewText
+        payload.htmlBody = campaign.bodyHtml  // server uses htmlBody
       }
 
       // Map recipient selection to server fields
       if (campaign.recipients.type === 'tags') {
         payload.tags = campaign.recipients.tags
+      } else if (campaign.recipients.type === 'segment') {
+        payload.segmentId = campaign.recipients.segmentId
       } else if (campaign.recipients.type === 'specific') {
         payload.contactIds = campaign.recipients.contactIds
       }
@@ -559,7 +761,7 @@ export default function CampaignWizard() {
         const r = await apiFetch<{ ok: boolean; recipientCount: number; message: string }>(
           `/api/campaigns/${created.id}/send`, { method: 'POST' }
         )
-        setSentResult({ count: r.recipientCount, scheduled: false })
+        setSentResult({ count: r.recipientCount, scheduled: false, message: r.message })
       } else {
         setSentResult({ count: estimatedRecipients, scheduled: true })
       }
@@ -585,7 +787,7 @@ export default function CampaignWizard() {
           <p className="text-sage-500 mt-2">
             {sentResult.scheduled
               ? `Saved and scheduled for ${campaign.scheduledAt}.`
-              : `Queued for ${sentResult.count} contact${sentResult.count !== 1 ? 's' : ''}. Emails will be delivered within minutes.`}
+              : sentResult.message || `Queued for ${sentResult.count} contact${sentResult.count !== 1 ? 's' : ''}. Emails will be delivered within minutes.`}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -637,6 +839,7 @@ export default function CampaignWizard() {
             set={set}
             contacts={contacts}
             allTags={allTags}
+            segments={segments}
             contactsLoading={contactsLoading}
           />
         )}

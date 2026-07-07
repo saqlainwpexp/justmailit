@@ -1156,6 +1156,102 @@ ctcR.post('/:id/tag', async (req, res) => {
 app.use('/api/contacts', ctcR)
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SEGMENTS — saved dynamic contact filters, re-evaluated live (not a snapshot)
+// so a segment's membership always reflects current contact/engagement state.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function contactMatchesCondition(contact, cond, workspaceId) {
+  const recipientsFor = () => db.data.campaignRecipients.filter(r => r.contactId === contact.id && r.workspaceId === workspaceId)
+  const sinceMs = days => Date.now() - Number(days) * 86400000
+  switch (cond.field) {
+    case 'tag':                 return (contact.tags || []).includes(cond.value)
+    case 'tag_not':              return !(contact.tags || []).includes(cond.value)
+    case 'list':                 return (contact.lists || []).includes(cond.value)
+    case 'list_not':              return !(contact.lists || []).includes(cond.value)
+    case 'status':               return contact.status === cond.value
+    case 'email_domain':         return contact.email.toLowerCase().endsWith('@' + String(cond.value).toLowerCase().replace(/^@/, ''))
+    case 'company_contains':     return (contact.company || '').toLowerCase().includes(String(cond.value).toLowerCase())
+    case 'added_within_days':    return new Date(contact.added).getTime() >= sinceMs(cond.value)
+    case 'added_before_days':    return new Date(contact.added).getTime() < sinceMs(cond.value)
+    case 'opened_within_days':   return recipientsFor().some(r => r.openedAt && new Date(r.openedAt).getTime() >= sinceMs(cond.value))
+    case 'clicked_within_days':  return recipientsFor().some(r => r.clickedAt && new Date(r.clickedAt).getTime() >= sinceMs(cond.value))
+    case 'never_opened':         { const r = recipientsFor(); return r.some(x => x.sentAt) && !r.some(x => x.openedAt) }
+    case 'never_clicked':        { const r = recipientsFor(); return r.some(x => x.sentAt) && !r.some(x => x.clickedAt) }
+    default: return true
+  }
+}
+
+function evaluateSegment(contacts, conditions, matchType, workspaceId) {
+  if (!conditions?.length) return contacts
+  return contacts.filter(c => {
+    const results = conditions.map(cond => contactMatchesCondition(c, cond, workspaceId))
+    return matchType === 'any' ? results.some(Boolean) : results.every(Boolean)
+  })
+}
+
+function segmentContacts(segment) {
+  const contacts = db.data.contacts.filter(c => c.workspaceId === segment.workspaceId)
+  return evaluateSegment(contacts, segment.conditions, segment.matchType, segment.workspaceId)
+}
+
+const segR = express.Router()
+segR.use(requireAuth, requireWorkspace)
+
+segR.get('/', (req, res) => {
+  const segs = db.data.segments.filter(s => s.workspaceId === req.workspace.id)
+  res.json(segs.map(s => ({ ...s, count: segmentContacts(s).length })))
+})
+
+segR.get('/:id', (req, res) => {
+  const s = db.data.segments.find(s => s.id === parseInt(req.params.id) && s.workspaceId === req.workspace.id)
+  if (!s) return res.status(404).json({ error: 'Not found' })
+  res.json({ ...s, count: segmentContacts(s).length })
+})
+
+// Live match count for a not-yet-saved condition set, so the segment builder
+// UI can show "X contacts match" while the user is still editing.
+segR.post('/preview', (req, res) => {
+  const { conditions, matchType } = req.body
+  const contacts = db.data.contacts.filter(c => c.workspaceId === req.workspace.id)
+  const matched = evaluateSegment(contacts, conditions || [], matchType === 'any' ? 'any' : 'all', req.workspace.id)
+  res.json({ count: matched.length })
+})
+
+segR.post('/', async (req, res) => {
+  const { name, description, matchType, conditions } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'name required' })
+  if (!Array.isArray(conditions) || !conditions.length) return res.status(400).json({ error: 'At least one condition is required.' })
+  const seg = {
+    id: nextId('segments'), workspaceId: req.workspace.id, name: name.trim(),
+    description: description || '', matchType: matchType === 'any' ? 'any' : 'all',
+    conditions,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }
+  db.data.segments.push(seg); await db.write()
+  res.status(201).json({ ...seg, count: segmentContacts(seg).length })
+})
+
+segR.put('/:id', async (req, res) => {
+  const s = db.data.segments.find(s => s.id === parseInt(req.params.id) && s.workspaceId === req.workspace.id)
+  if (!s) return res.status(404).json({ error: 'Not found' })
+  const { id: _id, workspaceId: _wsId, ...updates } = req.body
+  Object.assign(s, updates, { updatedAt: new Date().toISOString() })
+  await db.write()
+  res.json({ ...s, count: segmentContacts(s).length })
+})
+
+segR.delete('/:id', async (req, res) => {
+  const id = parseInt(req.params.id)
+  const s = db.data.segments.find(s => s.id === id && s.workspaceId === req.workspace.id)
+  if (!s) return res.status(404).json({ error: 'Not found' })
+  db.data.segments = db.data.segments.filter(s => s.id !== id)
+  await db.write()
+  res.json({ ok: true })
+})
+
+app.use('/api/segments', segR)
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TEMPLATES
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1367,8 +1463,9 @@ app.use('/api/public', publicR)
 const campR = express.Router()
 campR.use(requireAuth, requireWorkspace)
 
-function campStats(id) {
-  const r = db.data.campaignRecipients.filter(r=>r.campaignId===id)
+function campStats(id, variantId) {
+  let r = db.data.campaignRecipients.filter(r=>r.campaignId===id)
+  if (variantId) r = r.filter(x=>x.variantId===variantId)
   const sent=r.filter(x=>x.sentAt).length
   return {
     total:r.length, sent,
@@ -1381,10 +1478,32 @@ function campStats(id) {
   }
 }
 
-campR.get('/',     (req,res)=>res.json(db.data.campaigns.filter(c=>c.workspaceId===req.workspace.id).map(c=>({...c,stats:campStats(c.id)}))))
-campR.get('/:id',  (req,res)=>{ const c=db.data.campaigns.find(c=>c.id===parseInt(req.params.id) && c.workspaceId===req.workspace.id); if(!c)return res.status(404).json({error:'Not found'}); res.json({...c,stats:campStats(c.id)}) })
+// A/B test campaigns additionally carry per-variant stats so the UI can show
+// variant A vs. variant B performance side by side.
+function withCampStats(c) {
+  const out = { ...c, stats: campStats(c.id) }
+  if (c.abTest?.enabled) out.variantStats = { a: campStats(c.id,'a'), b: campStats(c.id,'b') }
+  return out
+}
+
+campR.get('/',     (req,res)=>res.json(db.data.campaigns.filter(c=>c.workspaceId===req.workspace.id).map(withCampStats)))
+campR.get('/:id',  (req,res)=>{ const c=db.data.campaigns.find(c=>c.id===parseInt(req.params.id) && c.workspaceId===req.workspace.id); if(!c)return res.status(404).json({error:'Not found'}); res.json(withCampStats(c)) })
 
 campR.post('/', async (req,res) => {
+  if (req.body.abTest?.enabled) {
+    const ab = req.body.abTest
+    const variants = ab.variants
+    if (!Array.isArray(variants) || variants.length !== 2 || variants.some(v=>!v.subject?.trim() || !v.htmlBody?.trim()))
+      return res.status(400).json({ error:'A/B test requires exactly 2 variants, each with a subject and body.' })
+    if (!['openRate','clickRate'].includes(ab.winnerMetric))
+      return res.status(400).json({ error:'winnerMetric must be "openRate" or "clickRate".' })
+    if (!(ab.testPercent > 0 && ab.testPercent <= 100))
+      return res.status(400).json({ error:'testPercent must be between 1 and 100.' })
+    if (!(ab.testDurationHours > 0))
+      return res.status(400).json({ error:'testDurationHours must be greater than 0.' })
+    ab.variants = [{ ...variants[0], id:'a' }, { ...variants[1], id:'b' }]
+    ab.testSentAt = null; ab.winnerVariantId = null; ab.winnerSentAt = null; ab.finalStats = null
+  }
   const c = {
     ...req.body,
     id:nextId('campaigns'), workspaceId:req.workspace.id,
@@ -1397,7 +1516,7 @@ campR.post('/', async (req,res) => {
 campR.put('/:id', async (req,res) => {
   const c=db.data.campaigns.find(c=>c.id===parseInt(req.params.id) && c.workspaceId===req.workspace.id)
   if (!c) return res.status(404).json({ error:'Not found' })
-  if (c.status==='sent') return res.status(400).json({ error:'Cannot edit a sent campaign.' })
+  if (['sent','sending','testing'].includes(c.status)) return res.status(400).json({ error:'Cannot edit a campaign that is sending, testing, or already sent.' })
   const { id:_id, workspaceId:_wsId, ...updates } = req.body
   Object.assign(c,updates,{updatedAt:new Date().toISOString()}); await db.write(); res.json(c)
 })
@@ -1417,16 +1536,86 @@ campR.delete('/:id', async (req,res) => {
 function resolveCampaignAudience(campaign) {
   let contacts = db.data.contacts.filter(c=>c.workspaceId===campaign.workspaceId && c.status==='subscribed')
   if (campaign.contactIds?.length) return contacts.filter(c=>campaign.contactIds.includes(c.id))
+  if (campaign.segmentId) {
+    const seg = db.data.segments.find(s=>s.id===campaign.segmentId && s.workspaceId===campaign.workspaceId)
+    return seg ? evaluateSegment(contacts, seg.conditions, seg.matchType, campaign.workspaceId) : []
+  }
   if (campaign.lists?.length)  contacts = contacts.filter(c=>c.lists?.some(l=>campaign.lists.includes(l)))
   else if (campaign.tags?.length) contacts = contacts.filter(c=>c.tags?.some(t=>campaign.tags.includes(t)))
   return contacts
+}
+
+function shuffled(arr) {
+  const a = arr.slice()
+  for (let i=a.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]] }
+  return a
+}
+
+async function sendCampaignBatch(campaign, account, recs, subject, htmlBody) {
+  const transport = makeTransport(account)
+  for (const rec of recs) {
+    const c = db.data.contacts.find(c=>c.id===rec.contactId)
+    if (!c) continue
+    try {
+      await transport.sendMail({
+        from:`"${campaign.fromName||account.fromName||account.name}" <${account.email}>`,
+        to:c.email, replyTo:campaign.replyTo||undefined,
+        subject:fillTags(subject,c,account),
+        html:addTracking(fillTags(htmlBody,c,account), rec.id),
+      })
+      rec.sentAt=new Date().toISOString()
+      c.lastEmailed=new Date().toISOString()
+      account.sentToday=(account.sentToday||0)+1
+      account.totalSent=(account.totalSent||0)+1
+    } catch(e) { rec.failedAt=new Date().toISOString() }
+    await db.write()
+    await new Promise(r=>setTimeout(r,80))
+  }
+}
+
+// Picks (or is told) the winning variant, sends its content to whichever
+// recipients were held back from the initial test batch, and closes out the
+// campaign. Shared by the automatic (duration-elapsed) and manual (early
+// override) winner-selection paths.
+async function finalizeAbTest(campaign, winnerId) {
+  campaign.abTest.winnerVariantId = winnerId
+  campaign.abTest.finalStats = { a: campStats(campaign.id,'a'), b: campStats(campaign.id,'b') }
+  const winnerVariant = campaign.abTest.variants.find(v=>v.id===winnerId)
+  const account = db.data.emailAccounts.find(a=>a.id===campaign.fromAccountId)
+  const remainder = db.data.campaignRecipients.filter(r=>r.campaignId===campaign.id && !r.isTestSample && !r.sentAt)
+  if (!account || !account.smtpPass || !remainder.length) {
+    campaign.status='sent'; campaign.abTest.winnerSentAt=new Date().toISOString(); await db.write(); return
+  }
+  campaign.status='sending'; await db.write()
+  await sendCampaignBatch(campaign, account, remainder, winnerVariant.subject, winnerVariant.htmlBody)
+  campaign.status='sent'; campaign.abTest.winnerSentAt=new Date().toISOString(); await db.write()
+  pushNotif(campaign.workspaceId, 'campaign', 'A/B test winner selected & sent',
+    `"${campaign.name}" — variant ${winnerId.toUpperCase()} won. Sent to ${remainder.length} remaining contact${remainder.length!==1?'s':''}.`,
+    { label: 'View report', href: '/campaigns' }
+  )
+}
+
+// Ticks every 60s (see startup()) looking for A/B tests whose test window has
+// elapsed, so the winner gets picked and the remainder sent automatically
+// even if nobody has the app open.
+async function processAbTests() {
+  const now = Date.now()
+  const pending = db.data.campaigns.filter(c => c.status==='testing' && c.abTest?.enabled && !c.abTest.winnerVariantId)
+  for (const campaign of pending) {
+    const elapsedHours = (now - new Date(campaign.abTest.testSentAt).getTime()) / 3600000
+    if (elapsedHours < campaign.abTest.testDurationHours) continue
+    const metric = campaign.abTest.winnerMetric
+    const statsA = campStats(campaign.id,'a'), statsB = campStats(campaign.id,'b')
+    const winnerId = statsA[metric] >= statsB[metric] ? 'a' : 'b'
+    await finalizeAbTest(campaign, winnerId)
+  }
 }
 
 campR.post('/:id/send', requirePlanActive, async (req,res) => {
   const campaign = db.data.campaigns.find(c=>c.id===parseInt(req.params.id) && c.workspaceId===req.workspace.id)
   if (!campaign) return res.status(404).json({ error:'Campaign not found.' })
   if (campaign.status==='sent') return res.status(400).json({ error:'Already sent.' })
-  if (campaign.status==='sending') return res.status(400).json({ error:'Currently sending.' })
+  if (campaign.status==='sending' || campaign.status==='testing') return res.status(400).json({ error:'Currently sending.' })
   const account = db.data.emailAccounts.find(a=>a.id===campaign.fromAccountId && a.workspaceId===req.workspace.id)
   if (!account) return res.status(400).json({ error:'No sending account configured. Edit campaign → choose an email account.' })
   if (!account.smtpPass) return res.status(400).json({ error:'SMTP password missing. Edit the email account to add credentials.' })
@@ -1435,46 +1624,79 @@ campR.post('/:id/send', requirePlanActive, async (req,res) => {
   const limitErr = checkEmailLimit(contacts.length, req.workspace.id, req.planInfo)
   if (limitErr) return res.status(403).json(limitErr)
 
+  const ab = campaign.abTest?.enabled ? campaign.abTest : null
+
+  if (!ab) {
+    campaign.status='sending'; campaign.sentAt=new Date().toISOString()
+    const newRecs = contacts.map(c=>({ id:nextId('campaignRecipients'), workspaceId:req.workspace.id, campaignId:campaign.id, contactId:c.id, email:c.email, sentAt:null,failedAt:null,openedAt:null,clickedAt:null,bouncedAt:null, variantId:null, isTestSample:false }))
+    db.data.campaignRecipients.push(...newRecs); await db.write()
+
+    res.json({ ok:true, recipientCount:contacts.length, message:`Queued for ${contacts.length} contacts. Sending in background…` })
+
+    ;(async()=>{
+      await sendCampaignBatch(campaign, account, newRecs, campaign.subject, campaign.htmlBody)
+      campaign.status='sent'; await db.write()
+      console.log(`Campaign "${campaign.name}" sent to ${contacts.length} contacts.`)
+      pushNotif(req.workspace.id, 'campaign', 'Campaign sent successfully',
+        `"${campaign.name}" delivered to ${contacts.length} contact${contacts.length !== 1 ? 's' : ''}.`,
+        { label: 'View report', href: '/campaigns' }
+      )
+    })().catch(console.error)
+    return
+  }
+
+  // A/B test: split a sample of the audience across the two variants, send
+  // those now, and hold the rest back until a winner is picked (either
+  // automatically once testDurationHours elapses, or early via /pick-winner).
+  const testCount = Math.max(2, Math.round(contacts.length * ab.testPercent / 100))
+  const perVariant = Math.max(1, Math.floor(testCount / 2))
+  const pool = shuffled(contacts)
+  const groupA = pool.slice(0, perVariant)
+  const groupB = pool.slice(perVariant, perVariant*2)
+  const remainder = pool.slice(perVariant*2)
+
   campaign.status='sending'; campaign.sentAt=new Date().toISOString()
-  const newRecs = contacts.map(c=>({ id:nextId('campaignRecipients'), workspaceId:req.workspace.id, campaignId:campaign.id, contactId:c.id, email:c.email, sentAt:null,failedAt:null,openedAt:null,clickedAt:null,bouncedAt:null }))
-  db.data.campaignRecipients.push(...newRecs); await db.write()
+  ab.testSentAt = new Date().toISOString()
 
-  res.json({ ok:true, recipientCount:contacts.length, message:`Queued for ${contacts.length} contacts. Sending in background…` })
+  const makeRec = (c,variantId,isTestSample) => ({ id:nextId('campaignRecipients'), workspaceId:req.workspace.id, campaignId:campaign.id, contactId:c.id, email:c.email, sentAt:null,failedAt:null,openedAt:null,clickedAt:null,bouncedAt:null, variantId, isTestSample })
+  const recsA = groupA.map(c=>makeRec(c,'a',true))
+  const recsB = groupB.map(c=>makeRec(c,'b',true))
+  const recsRemainder = remainder.map(c=>makeRec(c,null,false))
+  db.data.campaignRecipients.push(...recsA, ...recsB, ...recsRemainder)
+  await db.write()
 
-  // Background send
+  res.json({ ok:true, recipientCount:contacts.length, message:`A/B test started — ${recsA.length + recsB.length} contacts (variant A/B), ${recsRemainder.length} waiting for the winner.` })
+
   ;(async()=>{
-    const transport = makeTransport(account)
-    for (const rec of newRecs) {
-      const c = db.data.contacts.find(c=>c.id===rec.contactId)
-      if (!c) continue
-      try {
-        await transport.sendMail({
-          from:`"${campaign.fromName||account.fromName||account.name}" <${account.email}>`,
-          to:c.email, replyTo:campaign.replyTo||undefined,
-          subject:fillTags(campaign.subject,c,account),
-          html:addTracking(fillTags(campaign.htmlBody,c,account), rec.id),
-        })
-        rec.sentAt=new Date().toISOString()
-        c.lastEmailed=new Date().toISOString()
-        account.sentToday=(account.sentToday||0)+1
-        account.totalSent=(account.totalSent||0)+1
-      } catch(e) { rec.failedAt=new Date().toISOString() }
-      await db.write()
-      await new Promise(r=>setTimeout(r,80))
-    }
-    campaign.status='sent'; await db.write()
-    console.log(`Campaign "${campaign.name}" sent to ${contacts.length} contacts.`)
-    pushNotif(req.workspace.id, 'campaign', 'Campaign sent successfully',
-      `"${campaign.name}" delivered to ${contacts.length} contact${contacts.length !== 1 ? 's' : ''}.`,
+    const variantA = ab.variants.find(v=>v.id==='a'), variantB = ab.variants.find(v=>v.id==='b')
+    await sendCampaignBatch(campaign, account, recsA, variantA.subject, variantA.htmlBody)
+    await sendCampaignBatch(campaign, account, recsB, variantB.subject, variantB.htmlBody)
+    campaign.status='testing'; await db.write()
+    console.log(`A/B test batch sent for campaign "${campaign.name}" — awaiting ${ab.testDurationHours}h before picking a winner.`)
+    pushNotif(req.workspace.id, 'campaign', 'A/B test started',
+      `"${campaign.name}" — test emails sent to ${recsA.length+recsB.length} contacts. Winner picked automatically in ${ab.testDurationHours}h.`,
       { label: 'View report', href: '/campaigns' }
     )
   })().catch(console.error)
 })
 
+// Lets a user lock in a winner before testDurationHours elapses (e.g. one
+// variant is already clearly ahead) instead of waiting out the full window.
+campR.post('/:id/pick-winner', async (req,res) => {
+  const campaign = db.data.campaigns.find(c=>c.id===parseInt(req.params.id) && c.workspaceId===req.workspace.id)
+  if (!campaign) return res.status(404).json({ error:'Not found' })
+  if (!campaign.abTest?.enabled) return res.status(400).json({ error:'Not an A/B test campaign.' })
+  if (campaign.status!=='testing') return res.status(400).json({ error:'Test is not currently running.' })
+  const { variantId } = req.body
+  if (!['a','b'].includes(variantId)) return res.status(400).json({ error:'variantId must be "a" or "b".' })
+  res.json({ ok:true })
+  finalizeAbTest(campaign, variantId).catch(console.error)
+})
+
 campR.get('/:id/stats', (req,res) => {
   const c=db.data.campaigns.find(c=>c.id===parseInt(req.params.id) && c.workspaceId===req.workspace.id)
   if (!c) return res.status(404).json({ error:'Not found' })
-  res.json({ ...campStats(c.id), status:c.status })
+  res.json({ ...campStats(c.id), status:c.status, ...(c.abTest?.enabled?{variantStats:{a:campStats(c.id,'a'),b:campStats(c.id,'b')}}:{}) })
 })
 
 // 1×1 open-tracking pixel
@@ -2313,6 +2535,7 @@ async function startup() {
     workspaceInvites:     [],
     forms:                [],
     landingPages:         [],
+    segments:             [],
     ...db.data,
   }
 
@@ -2385,6 +2608,10 @@ async function startup() {
   // Automation engine: safe to start now that the initial db.read() has completed.
   setInterval(() => processAutomations().catch(console.error), 60000)
   setTimeout(() => processAutomations().catch(console.error), 5000)
+
+  // A/B test winner picker: same reasoning as above — must start after read().
+  setInterval(() => processAbTests().catch(console.error), 60000)
+  setTimeout(() => processAbTests().catch(console.error), 5000)
 }
 
 startup().catch(err => {

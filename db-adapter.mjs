@@ -53,6 +53,7 @@ const TABLES = {
   workspaceInvites:      'workspace_invites',
   forms:                 'forms',
   landingPages:          'landing_pages',
+  segments:              'segments',
 }
 
 const CHUNK_SIZE = 500 // rows per upsert/delete batch
