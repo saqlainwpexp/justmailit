@@ -22,6 +22,8 @@ import ForgotPassword from './pages/auth/ForgotPassword'
 import VerifyEmail from './pages/auth/VerifyEmail'
 import LandingPage from './pages/public/LandingPage'
 import EmbedForm from './pages/public/EmbedForm'
+import Unsubscribe from './pages/public/Unsubscribe'
+import ContactDetail from './pages/ContactDetail'
 
 export default function App() {
   return (
@@ -35,6 +37,7 @@ export default function App() {
       {/* Public, unauthenticated — embeddable forms and standalone landing pages */}
       <Route path="/lp/:slug" element={<LandingPage />} />
       <Route path="/embed/form/:id" element={<EmbedForm />} />
+      <Route path="/unsubscribe/:token" element={<Unsubscribe />} />
 
       {/* All app routes require authentication */}
       <Route element={
@@ -49,6 +52,7 @@ export default function App() {
         <Route path="/automation" element={<Automation />} />
         <Route path="/inbox" element={<Inbox />} />
         <Route path="/contacts" element={<Contacts />} />
+        <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/segments" element={<Segments />} />
         <Route path="/accounts" element={<EmailAccounts />} />
         <Route path="/domains" element={<Domains />} />

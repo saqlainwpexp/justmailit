@@ -156,6 +156,14 @@ async function sendTransactionalEmail({ to, subject, html }) {
 }
 
 // Fill merge tags
+// Lazily assigns each contact a stable, unguessable token the first time an
+// email actually needs an unsubscribe link — avoids exposing an incrementing
+// contact id (or email in plaintext) in every outbound message.
+function getOrCreateUnsubToken(contact) {
+  if (!contact.unsubscribeToken) contact.unsubscribeToken = crypto.randomBytes(16).toString('hex')
+  return contact.unsubscribeToken
+}
+
 function fillTags(html, contact, sender) {
   if (!html) return ''
   return html
@@ -166,7 +174,7 @@ function fillTags(html, contact, sender) {
     .replace(/\{\{sender_name\}\}/gi,   sender?.fromName  || '')
     .replace(/\{\{sender_email\}\}/gi,  sender?.email     || '')
     .replace(/\{\{date\}\}/gi, new Date().toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' }))
-    .replace(/\{\{unsubscribe_link\}\}/gi, `${FRONTEND}/unsubscribe?email=${encodeURIComponent(contact.email)}`)
+    .replace(/\{\{unsubscribe_link\}\}/gi, `${FRONTEND}/unsubscribe/${getOrCreateUnsubToken(contact)}`)
 }
 
 // Rewrite <a href> links to route through the click-tracking redirect, and append
@@ -1162,10 +1170,57 @@ ctcR.delete('/:id', async (req, res) => {
   await db.write(); res.json({ ok:true })
 })
 
+// Full activity timeline for one contact — campaigns they were sent (with
+// open/click/failure state) and automations they've been enrolled in. Used
+// by the contact detail page's drill-down view.
+ctcR.get('/:id/activity', (req, res) => {
+  const id = parseInt(req.params.id)
+  const contact = db.data.contacts.find(c => c.id === id && c.workspaceId === req.workspace.id)
+  if (!contact) return res.status(404).json({ error: 'Not found' })
+
+  const campaigns = db.data.campaignRecipients
+    .filter(r => r.contactId === id && r.workspaceId === req.workspace.id)
+    .map(r => {
+      const camp = db.data.campaigns.find(c => c.id === r.campaignId)
+      return {
+        campaignId: r.campaignId, campaignName: camp?.name || '(deleted campaign)', subject: camp?.subject || '',
+        sentAt: r.sentAt, openedAt: r.openedAt, clickedAt: r.clickedAt, failedAt: r.failedAt, variantId: r.variantId || null,
+      }
+    })
+    .sort((a, b) => new Date(b.sentAt || 0) - new Date(a.sentAt || 0))
+
+  const automations = db.data.automationEnrollments
+    .filter(e => e.contactId === id && e.workspaceId === req.workspace.id)
+    .map(e => {
+      const auto = db.data.automations.find(a => a.id === e.automationId)
+      return { automationId: e.automationId, automationName: auto?.name || '(deleted automation)', status: e.status, enrolledAt: e.enrolledAt }
+    })
+    .sort((a, b) => new Date(b.enrolledAt) - new Date(a.enrolledAt))
+
+  res.json({ contact, campaigns, automations })
+})
+
 ctcR.post('/bulk-delete', async (req, res) => {
   const { ids } = req.body
   db.data.contacts = db.data.contacts.filter(c=>!(ids.includes(c.id) && c.workspaceId===req.workspace.id))
   await db.write(); res.json({ ok:true, deleted:ids.length })
+})
+
+// Additive only — existing tags/lists on each contact are kept, these are
+// merged in (not a replace), so running this twice with the same tag is safe.
+ctcR.post('/bulk-tag', async (req, res) => {
+  const { ids, addTags, addLists } = req.body
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' })
+  if (!addTags?.length && !addLists?.length) return res.status(400).json({ error: 'addTags or addLists required' })
+  let updated = 0
+  for (const c of db.data.contacts) {
+    if (!ids.includes(c.id) || c.workspaceId !== req.workspace.id) continue
+    for (const t of addTags || [])  if (!c.tags.includes(t))  c.tags.push(t)
+    for (const l of addLists || []) if (!c.lists.includes(l)) c.lists.push(l)
+    updated++
+  }
+  await db.write()
+  res.json({ ok: true, updated })
 })
 
 // Proper RFC4180-ish CSV parser — handles quoted fields (with embedded commas,
@@ -1590,6 +1645,25 @@ publicR.get('/landing-pages/:slug', (req, res) => {
   })
 })
 
+// GET is read-only on purpose — corporate email scanners and Outlook Safe
+// Links prefetch every URL in an inbound message, so an unsubscribe link that
+// acts on GET silently unsubscribes people who never clicked anything. The
+// actual unsubscribe only happens on the POST below, triggered by a real
+// button click on the confirmation page.
+publicR.get('/unsubscribe/:token', (req, res) => {
+  const contact = db.data.contacts.find(c => c.unsubscribeToken === req.params.token)
+  if (!contact) return res.status(404).json({ error: 'This unsubscribe link is invalid or has expired.' })
+  res.json({ email: contact.email, alreadyUnsubscribed: contact.status === 'unsubscribed' })
+})
+
+publicR.post('/unsubscribe/:token', async (req, res) => {
+  const contact = db.data.contacts.find(c => c.unsubscribeToken === req.params.token)
+  if (!contact) return res.status(404).json({ error: 'This unsubscribe link is invalid or has expired.' })
+  contact.status = 'unsubscribed'
+  await db.write()
+  res.json({ ok: true, email: contact.email })
+})
+
 app.use('/api/public', publicR)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1664,6 +1738,154 @@ campR.delete('/:id', async (req,res) => {
   db.data.campaigns=db.data.campaigns.filter(c=>c.id!==id)
   db.data.campaignRecipients=db.data.campaignRecipients.filter(r=>r.campaignId!==id)
   await db.write(); res.json({ ok:true })
+})
+
+// Duplicates a campaign as a fresh draft — recipients/stats/AB-test progress
+// are never copied since those describe what already happened to the
+// original send, not the new one.
+campR.post('/:id/clone', async (req, res) => {
+  const src = db.data.campaigns.find(c => c.id === parseInt(req.params.id) && c.workspaceId === req.workspace.id)
+  if (!src) return res.status(404).json({ error: 'Not found' })
+  const { id: _id, workspaceId: _wsId, status: _status, sentAt: _sentAt, scheduledAt: _scheduledAt, createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = src
+  const clone = {
+    ...rest,
+    id: nextId('campaigns'), workspaceId: req.workspace.id,
+    name: `${src.name} (Copy)`,
+    status: 'draft', sentAt: null, scheduledAt: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }
+  if (clone.abTest) {
+    clone.abTest = { ...clone.abTest, testSentAt: null, winnerVariantId: null, winnerSentAt: null, finalStats: null }
+  }
+  db.data.campaigns.push(clone)
+  await db.write()
+  res.status(201).json(clone)
+})
+
+// ── Deliverability checker ─────────────────────────────────────────────────────
+// A lightweight, heuristic pre-send check — not a real spam-filter simulation,
+// but catches the handful of things that most commonly tank inbox placement:
+// spammy subject lines, a missing unsubscribe link, an unverified sending
+// domain, image-only bodies, and broken links.
+
+const SPAM_TRIGGER_WORDS = [
+  'free', 'act now', 'click here', 'buy now', 'order now', 'limited time',
+  'satisfaction guaranteed', '100% free', 'risk-free', 'no obligation',
+  'winner', 'congratulations', 'urgent', 'act immediately', 'cash bonus',
+  'cheap', 'discount', 'earn money', 'extra income', 'get paid', 'no fees',
+  'once in a lifetime', 'special promotion', 'lowest price', 'while supplies last',
+]
+
+function extractLinks(html) {
+  const urls = new Set()
+  const re = /<a\b[^>]*href=["']([^"']+)["']/gi
+  let m
+  while ((m = re.exec(html || ''))) {
+    if (/^https?:\/\//i.test(m[1])) urls.add(m[1])
+  }
+  return [...urls].slice(0, 20)
+}
+
+async function checkLink(url) {
+  const tryFetch = async (method) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5000)
+    try {
+      const r = await fetch(url, { method, signal: controller.signal, redirect: 'follow' })
+      return r
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  try {
+    let r = await tryFetch('HEAD')
+    if (r.status === 405 || r.status === 501) r = await tryFetch('GET')
+    return { url, ok: r.ok, status: r.status }
+  } catch (e) {
+    return { url, ok: false, error: e.message }
+  }
+}
+
+campR.post('/deliverability-check', async (req, res) => {
+  const { subject = '', htmlBody = '', fromAccountId } = req.body
+  const checks = []
+
+  const subjLower = subject.toLowerCase()
+  const foundSpamWords = SPAM_TRIGGER_WORDS.filter(w => subjLower.includes(w))
+  checks.push({
+    id: 'subject-spam-words', label: 'Subject line avoids spam trigger words',
+    status: foundSpamWords.length ? 'warn' : 'pass',
+    detail: foundSpamWords.length ? `Found: ${foundSpamWords.join(', ')}` : 'No common spam trigger words found.',
+  })
+
+  checks.push({
+    id: 'subject-length', label: 'Subject line length',
+    status: subject.length > 60 ? 'warn' : 'pass',
+    detail: subject.length > 60 ? `${subject.length} characters — may get truncated in inboxes (aim for under 60).` : `${subject.length} characters.`,
+  })
+
+  const isAllCaps = subject.length > 3 && subject === subject.toUpperCase() && /[A-Z]/.test(subject)
+  checks.push({
+    id: 'subject-caps', label: "Subject line isn't all caps",
+    status: isAllCaps ? 'warn' : 'pass',
+    detail: isAllCaps ? 'ALL CAPS subject lines are a common spam signal.' : 'OK.',
+  })
+
+  const hasUnsub = /\{\{unsubscribe_link\}\}/i.test(htmlBody) || /\/unsubscribe\//i.test(htmlBody)
+  checks.push({
+    id: 'unsubscribe-link', label: 'Contains an unsubscribe link',
+    status: hasUnsub ? 'pass' : 'fail',
+    detail: hasUnsub ? 'Found the {{unsubscribe_link}} merge tag.' : 'No unsubscribe link found — add {{unsubscribe_link}} to the body. This is legally required (CAN-SPAM/GDPR).',
+  })
+
+  let domainCheck = { id: 'domain-auth', label: 'Sending domain has SPF/DKIM/DMARC verified', status: 'warn', detail: 'Could not determine the sending domain.' }
+  if (fromAccountId) {
+    const account = db.data.emailAccounts.find(a => a.id === parseInt(fromAccountId) && a.workspaceId === req.workspace.id)
+    if (account?.email?.includes('@')) {
+      const domainName = account.email.split('@')[1]
+      const domain = db.data.domains.find(d => d.workspaceId === req.workspace.id && d.domain === domainName)
+      if (domain) {
+        const dkimOk = domain.dkimStatus === 'pass' || domain.dkimStatus === 'external'
+        const allPass = domain.spfStatus === 'pass' && dkimOk && domain.dmarcStatus === 'pass'
+        domainCheck = {
+          id: 'domain-auth', label: 'Sending domain has SPF/DKIM/DMARC verified',
+          status: allPass ? 'pass' : 'warn',
+          detail: allPass ? `${domainName} is fully verified.` : `${domainName}: SPF ${domain.spfStatus}, DKIM ${domain.dkimStatus}, DMARC ${domain.dmarcStatus}. Unverified domains are more likely to land in spam.`,
+        }
+      } else {
+        domainCheck = { id: 'domain-auth', label: 'Sending domain has SPF/DKIM/DMARC verified', status: 'warn', detail: `"${domainName}" isn't set up under Domains — add and verify it to improve deliverability.` }
+      }
+    }
+  }
+  checks.push(domainCheck)
+
+  const imgCount = (htmlBody.match(/<img\b/gi) || []).length
+  const textLen = htmlBody.replace(/<[^>]+>/g, '').trim().length
+  const imageHeavy = imgCount > 0 && textLen < 100
+  checks.push({
+    id: 'image-text-ratio', label: 'Not image-only content',
+    status: imageHeavy ? 'warn' : 'pass',
+    detail: imageHeavy ? `Only ${textLen} characters of text alongside ${imgCount} image(s) — spam filters flag image-heavy, text-light emails.` : 'OK.',
+  })
+
+  const links = extractLinks(htmlBody)
+  if (links.length) {
+    const results = await Promise.all(links.map(checkLink))
+    const broken = results.filter(r => !r.ok)
+    checks.push({
+      id: 'broken-links', label: `Links are reachable (${links.length} checked)`,
+      status: broken.length ? 'fail' : 'pass',
+      detail: broken.length ? `${broken.length} broken link(s): ${broken.map(b => b.url).join(', ')}` : 'All links responded OK.',
+    })
+  } else {
+    checks.push({ id: 'broken-links', label: 'Links are reachable', status: 'pass', detail: 'No links found in the body.' })
+  }
+
+  const failCount = checks.filter(c => c.status === 'fail').length
+  const warnCount = checks.filter(c => c.status === 'warn').length
+  const score = Math.max(0, 100 - failCount * 25 - warnCount * 10)
+
+  res.json({ score, checks })
 })
 
 // Resolve audience contacts for a campaign (contacts are already implicitly

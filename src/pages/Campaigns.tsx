@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, Send, Clock, CheckCircle, XCircle, Eye, MousePointer,
-  Edit, Trash2, MoreHorizontal, Loader2, AlertCircle, X, FlaskConical, Trophy,
+  Edit, Trash2, MoreHorizontal, Loader2, AlertCircle, X, FlaskConical, Trophy, Copy,
 } from 'lucide-react'
 import { useData, apiFetch } from '../lib/api'
 import { formatNumber } from '../lib/utils'
@@ -175,6 +175,7 @@ export default function Campaigns() {
   const [winnerTarget,setWinnerTarget]= useState<Campaign | null>(null)
   const [deleting,    setDeleting]    = useState<number | null>(null)
   const [menuOpen,    setMenuOpen]    = useState<number | null>(null)
+  const [cloning,     setCloning]     = useState<number | null>(null)
 
   const list = (campaigns || []).filter(c => c.name.toLowerCase().includes(search.toLowerCase()))
 
@@ -193,6 +194,19 @@ export default function Campaigns() {
     try { await apiFetch(`/api/campaigns/${id}`, { method: 'DELETE' }); reload() }
     catch(e: any) { alert(e.message) }
     finally { setDeleting(null); setMenuOpen(null) }
+  }
+
+  async function cloneCampaign(id: number) {
+    setCloning(id)
+    try {
+      const clone = await apiFetch<Campaign>(`/api/campaigns/${id}/clone`, { method: 'POST' })
+      setMenuOpen(null)
+      navigate(`/campaigns/${clone.id}/edit`)
+    } catch(e: any) {
+      alert(e.message)
+    } finally {
+      setCloning(null)
+    }
   }
 
   return (
@@ -343,6 +357,14 @@ export default function Campaigns() {
                           </button>
                           {menuOpen === c.id && (
                             <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-xl shadow-lg border border-sage-100 overflow-hidden z-10 py-1">
+                              <button
+                                onClick={() => cloneCampaign(c.id)}
+                                disabled={cloning === c.id}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-sage-700 hover:bg-sage-50"
+                              >
+                                {cloning===c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Copy className="w-3 h-3" />}
+                                Duplicate
+                              </button>
                               <button
                                 onClick={() => deleteCampaign(c.id)}
                                 disabled={deleting === c.id}

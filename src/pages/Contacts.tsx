@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, Upload, Tag, MoreHorizontal, Mail, X,
   Check, Phone, Building, MapPin, Globe, Calendar, Trash2,
@@ -6,7 +7,7 @@ import {
 } from 'lucide-react'
 import { useData, apiFetch } from '../lib/api'
 
-interface Contact {
+export interface Contact {
   id: number; firstName: string; lastName: string; email: string
   company: string; phone: string; location: string; website: string
   tags: string[]; status: 'subscribed'|'unsubscribed'|'bounced'
@@ -61,7 +62,7 @@ function MoreMenu({ onEdit, onDelete }: { onEdit:()=>void; onDelete:()=>void }) 
 }
 
 // ── Contact Modal ──────────────────────────────────────────────────────────────
-function ContactModal({ initial, onSave, onClose }: { initial?:Contact; onSave:(c:Contact)=>void; onClose:()=>void }) {
+export function ContactModal({ initial, onSave, onClose }: { initial?:Contact; onSave:(c:Contact)=>void; onClose:()=>void }) {
   const [form,setForm]=useState<ContactForm>(initial ? {
     firstName:initial.firstName,lastName:initial.lastName,email:initial.email,
     company:initial.company,phone:initial.phone,location:initial.location,
@@ -304,14 +305,68 @@ function ImportModal({ onDone, onClose }: { onDone:()=>void; onClose:()=>void })
   )
 }
 
+// ── Bulk tag modal ─────────────────────────────────────────────────────────────
+function BulkTagModal({ ids, onDone, onClose }: { ids: number[]; onDone: () => void; onClose: () => void }) {
+  const [tags, setTags] = useState('')
+  const [lists, setLists] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit() {
+    const addTags = tags.split(',').map(t => t.trim().toLowerCase().replace(/\s+/g, '-')).filter(Boolean)
+    const addLists = lists.split(',').map(l => l.trim()).filter(Boolean)
+    if (!addTags.length && !addLists.length) return setError('Enter at least one tag or list.')
+    setSaving(true); setError('')
+    try {
+      await apiFetch('/api/contacts/bulk-tag', { json: { ids, addTags, addLists } })
+      onDone()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+        <div className="flex items-center justify-between p-5 border-b border-sage-100">
+          <h3 className="font-semibold text-sage-900">Tag {ids.length} contact{ids.length !== 1 ? 's' : ''}</h3>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-sage-100 flex items-center justify-center"><X className="w-4 h-4 text-sage-400"/></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-xs text-sage-500">Existing tags/lists on these contacts are kept — this only adds new ones.</p>
+          <div>
+            <label className="label">Add tags (comma-separated)</label>
+            <input className="input" placeholder="vip, newsletter" value={tags} onChange={e=>setTags(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Add to lists (comma-separated)</label>
+            <input className="input" placeholder="q4-promo" value={lists} onChange={e=>setLists(e.target.value)} />
+          </div>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          <div className="flex gap-3 pt-1">
+            <button onClick={onClose} className="btn-ghost flex-1">Cancel</button>
+            <button onClick={submit} disabled={saving} className="btn-primary flex-1">
+              {saving ? <><Loader2 className="w-4 h-4 animate-spin"/>Applying…</> : <><Check className="w-4 h-4"/>Apply</>}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function Contacts() {
+  const navigate = useNavigate()
   const { data, loading, reload } = useData<{contacts:Contact[];total:number}>('/api/contacts')
   const [search,setSearch]=useState('')
   const [statusFilter,setStatusFilter]=useState('')
   const [tagFilter,setTagFilter]=useState('')
   const [showModal,setShowModal]=useState(false)
   const [showImport,setShowImport]=useState(false)
+  const [showBulkTag,setShowBulkTag]=useState(false)
   const [editing,setEditing]=useState<Contact|null>(null)
   const [selected,setSelected]=useState<Set<number>>(new Set())
 
@@ -387,9 +442,14 @@ export default function Contacts() {
           {allTags.map(t=><option key={t} value={t}>{t}</option>)}
         </select>
         {selected.size > 0 && (
-          <button onClick={bulkDelete} className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 px-3 py-2 rounded-lg transition-colors">
-            <Trash2 className="w-3.5 h-3.5"/>Delete {selected.size}
-          </button>
+          <>
+            <button onClick={()=>setShowBulkTag(true)} className="inline-flex items-center gap-1.5 text-xs font-medium text-forest bg-forest/5 hover:bg-forest/10 px-3 py-2 rounded-lg transition-colors">
+              <Tag className="w-3.5 h-3.5"/>Tag {selected.size}
+            </button>
+            <button onClick={bulkDelete} className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 px-3 py-2 rounded-lg transition-colors">
+              <Trash2 className="w-3.5 h-3.5"/>Delete {selected.size}
+            </button>
+          </>
         )}
       </div>
       {(statusFilter || tagFilter || search) && selected.size === 0 && (
@@ -433,7 +493,7 @@ export default function Contacts() {
                       <input type="checkbox" checked={selected.has(c.id)} onChange={()=>toggleSelect(c.id)} className="rounded border-sage-300 text-forest"/>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
+                      <button onClick={()=>navigate(`/contacts/${c.id}`)} className="flex items-center gap-3 text-left hover:opacity-75 transition-opacity">
                         <div className={`w-8 h-8 rounded-full ${avatarColor(c.id)} flex items-center justify-center shrink-0`}>
                           <span className="text-[11px] font-semibold text-white">{initials(c)}</span>
                         </div>
@@ -441,7 +501,7 @@ export default function Contacts() {
                           <p className="text-sm font-medium text-forest">{c.firstName} {c.lastName}</p>
                           <p className="text-xs text-sage-400 mt-0.5">{c.email}</p>
                         </div>
-                      </div>
+                      </button>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center text-[10px] font-medium px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
@@ -473,6 +533,13 @@ export default function Contacts() {
         <ContactModal initial={editing||undefined} onSave={()=>{setShowModal(false);reload()}} onClose={()=>setShowModal(false)}/>
       )}
       {showImport && <ImportModal onDone={reload} onClose={()=>setShowImport(false)}/>}
+      {showBulkTag && (
+        <BulkTagModal
+          ids={[...selected]}
+          onDone={()=>{setShowBulkTag(false);setSelected(new Set());reload()}}
+          onClose={()=>setShowBulkTag(false)}
+        />
+      )}
     </div>
   )
 }

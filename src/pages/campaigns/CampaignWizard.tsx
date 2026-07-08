@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, ArrowRight, CheckCircle, Mail, Users, Calendar,
-  Send, Eye, Clock, AlertCircle, Zap, ChevronDown, Loader2, XCircle, FlaskConical,
+  Send, Eye, Clock, AlertCircle, Zap, ChevronDown, Loader2, XCircle, FlaskConical, ShieldCheck,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useData, apiFetch } from '../../lib/api'
@@ -495,6 +495,69 @@ function StepSchedule({ c, set }: { c: Campaign; set: (k: keyof Campaign, v: any
 }
 
 // ── Step 5: Review ─────────────────────────────────────────────────────────────
+interface DeliverabilityCheck { id: string; label: string; status: 'pass' | 'warn' | 'fail'; detail: string }
+interface DeliverabilityResult { score: number; checks: DeliverabilityCheck[] }
+
+const DELIVERABILITY_ICON = { pass: CheckCircle, warn: AlertCircle, fail: XCircle }
+const DELIVERABILITY_COLOR = { pass: 'text-green-500', warn: 'text-amber-500', fail: 'text-red-500' }
+
+function DeliverabilityPanel({ subject, htmlBody, fromAccountId }: { subject: string; htmlBody: string; fromAccountId: number }) {
+  const [result, setResult] = useState<DeliverabilityResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function runCheck() {
+    setLoading(true); setError('')
+    try {
+      const r = await apiFetch<DeliverabilityResult>('/api/campaigns/deliverability-check', {
+        json: { subject, htmlBody, fromAccountId },
+      })
+      setResult(r)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const scoreColor = !result ? '' : result.score >= 90 ? 'text-green-600' : result.score >= 70 ? 'text-amber-600' : 'text-red-600'
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-sage-500 uppercase tracking-wider">Deliverability check</p>
+        <button type="button" onClick={runCheck} disabled={loading} className="btn-ghost text-xs px-3 py-1.5">
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+          {loading ? 'Checking…' : result ? 'Re-check' : 'Run check'}
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      {result && (
+        <>
+          <div className="flex items-center gap-2">
+            <span className={cn('text-2xl font-bold', scoreColor)}>{result.score}</span>
+            <span className="text-xs text-sage-400">/ 100 deliverability score</span>
+          </div>
+          <div>
+            {result.checks.map(chk => {
+              const Icon = DELIVERABILITY_ICON[chk.status]
+              return (
+                <div key={chk.id} className="flex items-start gap-2.5 py-1.5 border-b border-sage-50 last:border-0">
+                  <Icon className={cn('w-3.5 h-3.5 shrink-0 mt-0.5', DELIVERABILITY_COLOR[chk.status])} />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-sage-700">{chk.label}</p>
+                    <p className="text-[11px] text-sage-400 mt-0.5">{chk.detail}</p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function StepReview({
   c, accounts, estimatedRecipients, onSend, sending, sendError,
 }: {
@@ -547,6 +610,12 @@ function StepReview({
           </div>
         ))}
       </div>
+
+      <DeliverabilityPanel
+        subject={effectiveSubject}
+        htmlBody={ab ? ab.variants[0].bodyHtml : c.bodyHtml}
+        fromAccountId={c.fromAccountId}
+      />
 
       <div className="grid grid-cols-2 gap-4">
         <div className="card !bg-sage-50 space-y-3">
@@ -651,12 +720,59 @@ function StepReview({
 // ── Main Wizard ────────────────────────────────────────────────────────────────
 export default function CampaignWizard() {
   const navigate = useNavigate()
+  const { id: editId } = useParams()
+  const isEditing = !!editId
   const [step, setStep] = useState(1)
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT)
+  const [loadingCampaign, setLoadingCampaign] = useState(isEditing)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [showPreview, setShowPreview] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [sentResult, setSentResult] = useState<{ count: number; scheduled: boolean; message?: string } | null>(null)
+
+  // Editing an existing draft/scheduled campaign — fetch it and reverse-map
+  // the server's flat shape (tags/segmentId/contactIds, top-level
+  // subject/htmlBody or abTest) back into the wizard's internal state shape.
+  useEffect(() => {
+    if (!editId) return
+    apiFetch<any>(`/api/campaigns/${editId}`)
+      .then(server => {
+        const recipients: Campaign['recipients'] = server.segmentId
+          ? { type: 'segment', tags: [], contactIds: [], segmentId: server.segmentId }
+          : server.contactIds?.length
+          ? { type: 'specific', tags: [], contactIds: server.contactIds, segmentId: null }
+          : server.tags?.length
+          ? { type: 'tags', tags: server.tags, contactIds: [], segmentId: null }
+          : { type: 'all', tags: [], contactIds: [], segmentId: null }
+
+        setCampaign({
+          name: server.name || '',
+          fromAccountId: server.fromAccountId || 0,
+          replyTo: server.replyTo || '',
+          trackOpens: server.trackOpens ?? true,
+          trackClicks: server.trackClicks ?? true,
+          subject: server.abTest?.enabled ? '' : (server.subject || ''),
+          previewText: server.abTest?.enabled ? '' : (server.previewText || ''),
+          bodyHtml: server.abTest?.enabled ? '' : (server.htmlBody || ''),
+          abTest: server.abTest?.enabled ? {
+            enabled: true,
+            variants: [
+              { subject: server.abTest.variants[0].subject, previewText: server.abTest.variants[0].previewText || '', bodyHtml: server.abTest.variants[0].htmlBody },
+              { subject: server.abTest.variants[1].subject, previewText: server.abTest.variants[1].previewText || '', bodyHtml: server.abTest.variants[1].htmlBody },
+            ],
+            testPercent: server.abTest.testPercent,
+            winnerMetric: server.abTest.winnerMetric,
+            testDurationHours: server.abTest.testDurationHours,
+          } : DEFAULT.abTest,
+          recipients,
+          scheduleType: server.scheduledAt ? 'scheduled' : 'now',
+          scheduledAt: server.scheduledAt ? new Date(server.scheduledAt).toISOString().slice(0, 16) : '',
+        })
+      })
+      .catch(e => setLoadError(e.message || 'Could not load this campaign.'))
+      .finally(() => setLoadingCampaign(false))
+  }, [editId])
 
   const { data: accountsRaw, loading: accountsLoading } = useData<Account[]>('/api/accounts')
   const { data: contactsRaw, loading: contactsLoading } = useData<{ contacts: ContactMini[]; total: number }>('/api/contacts?limit=1000')
@@ -740,26 +856,22 @@ export default function CampaignWizard() {
         payload.htmlBody = campaign.bodyHtml  // server uses htmlBody
       }
 
-      // Map recipient selection to server fields
-      if (campaign.recipients.type === 'tags') {
-        payload.tags = campaign.recipients.tags
-      } else if (campaign.recipients.type === 'segment') {
-        payload.segmentId = campaign.recipients.segmentId
-      } else if (campaign.recipients.type === 'specific') {
-        payload.contactIds = campaign.recipients.contactIds
-      }
-      // 'all' → no tags/contactIds → server sends to all subscribed
+      // Map recipient selection to server fields — always send all three so
+      // editing a campaign that switched recipient type (e.g. tags → segment)
+      // clears the stale field instead of leaving it stacked on the server.
+      payload.tags = campaign.recipients.type === 'tags' ? campaign.recipients.tags : []
+      payload.segmentId = campaign.recipients.type === 'segment' ? campaign.recipients.segmentId : null
+      payload.contactIds = campaign.recipients.type === 'specific' ? campaign.recipients.contactIds : []
 
-      // 1. Create the campaign
-      const created = await apiFetch<{ id: number }>('/api/campaigns', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
+      // 1. Create or update the campaign
+      const saved = isEditing
+        ? await apiFetch<{ id: number }>(`/api/campaigns/${editId}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : await apiFetch<{ id: number }>('/api/campaigns', { method: 'POST', body: JSON.stringify(payload) })
 
       if (campaign.scheduleType === 'now') {
         // 2. Fire the send
         const r = await apiFetch<{ ok: boolean; recipientCount: number; message: string }>(
-          `/api/campaigns/${created.id}/send`, { method: 'POST' }
+          `/api/campaigns/${saved.id}/send`, { method: 'POST' }
         )
         setSentResult({ count: r.recipientCount, scheduled: false, message: r.message })
       } else {
@@ -773,6 +885,24 @@ export default function CampaignWizard() {
   }
 
   const fromAccount = accounts.find(a => a.id === campaign.fromAccountId)
+
+  if (loadingCampaign) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-6 h-6 text-forest animate-spin" />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3 text-center">
+        <AlertCircle className="w-8 h-8 text-red-400" />
+        <p className="text-sm font-medium text-sage-700">{loadError}</p>
+        <button onClick={() => navigate('/campaigns')} className="btn-ghost text-xs"><ArrowLeft className="w-3.5 h-3.5" />Back to campaigns</button>
+      </div>
+    )
+  }
 
   if (sentResult) {
     return (
@@ -814,7 +944,7 @@ export default function CampaignWizard() {
           <ArrowLeft className="w-4 h-4 text-sage-600" />
         </button>
         <div>
-          <h1 className="page-title">New campaign</h1>
+          <h1 className="page-title">{isEditing ? 'Edit campaign' : 'New campaign'}</h1>
           <p className="page-subtitle">Step {step} of {STEPS.length} — {STEPS[step - 1].label}</p>
         </div>
       </div>
