@@ -24,6 +24,17 @@ import multer       from 'multer'
 
 dotenv.config()
 
+// Safety net: this is a shared, multi-tenant server, so one bad request (a
+// misconfigured SMTP connection throwing a raw socket error, say) should
+// never take the whole process — and every other workspace's traffic — down
+// with it. Log and keep running rather than crash.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (process kept alive):', err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection (process kept alive):', reason)
+})
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname  = dirname(__filename)
 const PORT       = parseInt(process.env.PORT || process.env.SERVER_PORT || '3001')
@@ -140,10 +151,17 @@ function makeTransport(account) {
 async function sendTransactionalEmail({ to, subject, html }) {
   let transport, from
   if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+    const port = parseInt(process.env.SMTP_PORT || '587')
     transport = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || '587'),
+      port,
+      // Port 465 needs an implicit-TLS connection from the first byte; port
+      // 587 starts plain and upgrades via STARTTLS. Getting this wrong (e.g.
+      // connecting to 465 with secure:false) causes a raw TLS/socket error
+      // that can crash the process instead of cleanly rejecting the promise.
+      secure: process.env.SMTP_SECURE === 'true' || port === 465,
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      connectionTimeout: 12000, greetingTimeout: 12000,
     })
     from = process.env.SMTP_FROM || process.env.SMTP_USER
   } else {
