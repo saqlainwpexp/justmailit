@@ -20,6 +20,7 @@ import { simpleParser } from 'mailparser'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import fs           from 'fs'
+import multer       from 'multer'
 
 dotenv.config()
 
@@ -116,6 +117,13 @@ function requireOwner(req, res, next) {
   if (user.role !== 'owner') return res.status(403).json({ error: 'Owner access required' })
   req.user = user; next()
 }
+
+// In-memory attachment uploads for compose/reply — files never touch disk and
+// are discarded as soon as the send completes (or fails).
+const uploadAttachments = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 },
+})
 
 // Make nodemailer transport from stored account config
 function makeTransport(account) {
@@ -889,8 +897,35 @@ acctR.put('/:id', async (req, res) => {
 })
 
 acctR.delete('/:id', async (req, res) => {
-  db.data.emailAccounts = db.data.emailAccounts.filter(a => !(a.id===parseInt(req.params.id) && a.workspaceId===req.workspace.id))
+  const id = parseInt(req.params.id)
+  db.data.emailAccounts = db.data.emailAccounts.filter(a => !(a.id===id && a.workspaceId===req.workspace.id))
+  // Removing an account from Justmailit should remove its synced copies of
+  // messages too — this only touches our local mirror, never the real mailbox.
+  db.data.inboxThreads = db.data.inboxThreads.filter(t => !(t.accountId===id && t.workspaceId===req.workspace.id))
   await db.write(); res.json({ ok: true })
+})
+
+// Soft "disconnect": keeps the account record (and SMTP credentials) around,
+// but stops auto-sync from touching it and clears out its previously-synced
+// inbox threads from Justmailit — the real mailbox on the provider is
+// untouched. Reconnecting just flips it back to 'pending' so the next sync
+// tick re-populates the inbox fresh.
+acctR.post('/:id/disconnect', async (req, res) => {
+  const id = parseInt(req.params.id)
+  const a = db.data.emailAccounts.find(a => a.id===id && a.workspaceId===req.workspace.id)
+  if (!a) return res.status(404).json({ error: 'Not found' })
+  a.status = 'disconnected'
+  db.data.inboxThreads = db.data.inboxThreads.filter(t => !(t.accountId===id && t.workspaceId===req.workspace.id))
+  await db.write()
+  res.json({ ok: true, status: a.status })
+})
+
+acctR.post('/:id/reconnect', async (req, res) => {
+  const a = db.data.emailAccounts.find(a => a.id===parseInt(req.params.id) && a.workspaceId===req.workspace.id)
+  if (!a) return res.status(404).json({ error: 'Not found' })
+  a.status = 'pending'
+  await db.write()
+  res.json({ ok: true, status: a.status })
 })
 
 function smtpErrorMessage(e, account) {
@@ -1133,44 +1168,112 @@ ctcR.post('/bulk-delete', async (req, res) => {
   await db.write(); res.json({ ok:true, deleted:ids.length })
 })
 
-ctcR.post('/import', requirePlanActive, async (req, res) => {
+// Proper RFC4180-ish CSV parser — handles quoted fields (with embedded commas,
+// newlines, and escaped "" quotes) and both \n and \r\n line endings, unlike a
+// naive split(',')/split('\n') which corrupts any field containing a comma.
+function parseCsv(text) {
+  const rows = []
+  let row = [], field = '', inQuotes = false
+  const s = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (inQuotes) {
+      if (c === '"') { if (s[i+1] === '"') { field += '"'; i++ } else inQuotes = false }
+      else field += c
+    } else {
+      if (c === '"') inQuotes = true
+      else if (c === ',') { row.push(field); field = '' }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = '' }
+      else field += c
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row) }
+  return rows.filter(r => !(r.length === 1 && r[0].trim() === ''))
+}
+
+// Returns the CSV's column headers + a few sample rows so the frontend can
+// show a field-mapping UI before committing to an import.
+ctcR.post('/import/preview', (req, res) => {
   const { csv } = req.body
-  if (!csv) return res.status(400).json({ error:'csv required' })
-  const lines = csv.trim().split('\n')
-  const headers = lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/\s+/g,'_').replace(/"/g,''))
-  let added=0, skipped=0
+  if (!csv) return res.status(400).json({ error: 'csv required' })
+  const rows = parseCsv(csv.trim())
+  if (!rows.length) return res.status(400).json({ error: 'CSV appears to be empty.' })
+  const [headers, ...dataRows] = rows
+  res.json({ headers, sampleRows: dataRows.slice(0, 5), rowCount: dataRows.length })
+})
+
+// mapping: { email: 'CSV Header Name', firstName: '...', ... } — only the
+// columns explicitly mapped get pulled into each contact; anything else in
+// the CSV is ignored. Only rows with a valid, mapped email get imported.
+ctcR.post('/import', requirePlanActive, async (req, res) => {
+  const { csv, mapping } = req.body
+  if (!csv) return res.status(400).json({ error: 'csv required' })
+  if (!mapping?.email) return res.status(400).json({ error: 'You must map a column to Email.' })
+  const rows = parseCsv(csv.trim())
+  if (!rows.length) return res.status(400).json({ error: 'CSV appears to be empty.' })
+  const [headers, ...dataRows] = rows
+  const colIndex = name => headers.findIndex(h => h.trim().toLowerCase() === String(name).trim().toLowerCase())
+  const idx = {
+    email: colIndex(mapping.email),
+    firstName: mapping.firstName ? colIndex(mapping.firstName) : -1,
+    lastName:  mapping.lastName  ? colIndex(mapping.lastName)  : -1,
+    company:   mapping.company   ? colIndex(mapping.company)   : -1,
+    phone:     mapping.phone     ? colIndex(mapping.phone)     : -1,
+    location:  mapping.location  ? colIndex(mapping.location)  : -1,
+    website:   mapping.website   ? colIndex(mapping.website)   : -1,
+    tags:      mapping.tags      ? colIndex(mapping.tags)      : -1,
+    lists:     mapping.lists     ? colIndex(mapping.lists)     : -1,
+    notes:     mapping.notes     ? colIndex(mapping.notes)     : -1,
+  }
+  if (idx.email === -1) return res.status(400).json({ error: 'Mapped Email column not found in this CSV.' })
+
+  let added = 0, skipped = 0
   const plan = req.planInfo
   const currentCount = db.data.contacts.filter(c => c.workspaceId === req.workspace.id).length
-  for (let i=1; i<lines.length; i++) {
-    const vals = lines[i].split(',').map(v=>v.trim().replace(/^"|"$/g,''))
-    const row  = Object.fromEntries(headers.map((h,j)=>[h,vals[j]||'']))
-    const email = (row.email||'').toLowerCase().trim()
-    if (!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped++; continue }
-    if (db.data.contacts.find(c=>c.workspaceId===req.workspace.id && c.email===email)) { skipped++; continue }
+  const get = (row, i) => (i >= 0 ? (row[i] || '').trim() : '')
+
+  for (const row of dataRows) {
+    const email = get(row, idx.email).toLowerCase()
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped++; continue }
+    if (db.data.contacts.find(c => c.workspaceId === req.workspace.id && c.email === email)) { skipped++; continue }
     if (plan.maxContacts && (currentCount + added) >= plan.maxContacts) { skipped++; continue }
+    const tagsRaw = get(row, idx.tags)
+    const listsRaw = get(row, idx.lists)
     db.data.contacts.push({
-      id:nextId('contacts'), workspaceId: req.workspace.id, email,
-      firstName: row.first_name||row.firstname||row.first||'',
-      lastName:  row.last_name ||row.lastname ||row.last ||'',
-      company:   row.company||row.organization||'',
-      phone:     row.phone||row.mobile||'',
-      location:  row.location||row.city||'',
-      website:   row.website||'',
-      tags:  row.tags  ? row.tags.split(';').map(t=>t.trim()).filter(Boolean) : [],
-      lists: row.list  ? [row.list] : [],
-      notes: row.notes||'', status:'subscribed',
-      added:new Date().toISOString(), lastEmailed:null,
+      id: nextId('contacts'), workspaceId: req.workspace.id, email,
+      firstName: get(row, idx.firstName), lastName: get(row, idx.lastName),
+      company: get(row, idx.company), phone: get(row, idx.phone),
+      location: get(row, idx.location), website: get(row, idx.website),
+      tags:  tagsRaw  ? tagsRaw.split(';').map(t => t.trim()).filter(Boolean) : [],
+      lists: listsRaw ? listsRaw.split(';').map(l => l.trim()).filter(Boolean) : [],
+      notes: get(row, idx.notes), status: 'subscribed',
+      added: new Date().toISOString(), lastEmailed: null,
     })
     added++
   }
-  await db.write(); res.json({ ok:true, added, skipped, total:lines.length-1 })
+  await db.write()
+  res.json({ ok: true, added, skipped, total: dataRows.length })
 })
 
+// Export accepts optional filters — ids (explicit selection takes priority
+// over everything else), tag, list, status, search — so "export selected" and
+// "export this tag/list/filtered view" both just work instead of always
+// dumping every contact in the workspace.
 ctcR.get('/export', (req, res) => {
+  const { ids, tag, list, status, search } = req.query
+  let filtered = db.data.contacts.filter(c => c.workspaceId === req.workspace.id)
+  if (ids) {
+    const idSet = new Set(String(ids).split(',').map(s => parseInt(s)).filter(n => !isNaN(n)))
+    filtered = filtered.filter(c => idSet.has(c.id))
+  } else {
+    if (tag)    filtered = filtered.filter(c => c.tags?.includes(tag))
+    if (list)   filtered = filtered.filter(c => c.lists?.includes(list))
+    if (status) filtered = filtered.filter(c => c.status === status)
+    if (search) { const q = String(search).toLowerCase(); filtered = filtered.filter(c => `${c.firstName} ${c.lastName} ${c.email} ${c.company}`.toLowerCase().includes(q)) }
+  }
   const cols = ['firstName','lastName','email','company','phone','location','website','status','tags','added']
   const header = cols.join(',')
-  const rows = db.data.contacts.filter(c => c.workspaceId === req.workspace.id)
-    .map(c=>cols.map(k=>`"${(Array.isArray(c[k])?c[k].join(';'):(c[k]||'')).toString().replace(/"/g,'""')}"`).join(','))
+  const rows = filtered.map(c=>cols.map(k=>`"${(Array.isArray(c[k])?c[k].join(';'):(c[k]||'')).toString().replace(/"/g,'""')}"`).join(','))
   res.setHeader('Content-Type','text/csv').setHeader('Content-Disposition','attachment; filename="contacts.csv"')
   res.send([header,...rows].join('\n'))
 })
@@ -1997,7 +2100,7 @@ async function processInboxSync() {
   if (inboxSyncRunning) return
   inboxSyncRunning = true
   try {
-    const accounts = db.data.emailAccounts.filter(a => a.imapHost || a.smtpHost)
+    const accounts = db.data.emailAccounts.filter(a => (a.imapHost || a.smtpHost) && a.status !== 'disconnected')
     for (const account of accounts) {
       try { await syncAccount(account) }
       catch (e) { console.error(`IMAP auto-sync failed for ${account.email}:`, e.message) }
@@ -2051,14 +2154,14 @@ inboxR.delete('/threads/:id', async (req, res) => {
 })
 
 // POST /api/inbox/threads/:id/reply  — send reply via SMTP
-inboxR.post('/threads/:id/reply', async (req, res) => {
+inboxR.post('/threads/:id/reply', uploadAttachments.array('attachments', 5), async (req, res) => {
   const thread = db.data.inboxThreads.find(t => t.id === parseInt(req.params.id) && t.workspaceId === req.workspace.id)
   if (!thread) return res.status(404).json({ error: 'Not found' })
 
   const { body, fromAccountId } = req.body
   if (!body) return res.status(400).json({ error: 'body required' })
 
-  const account = db.data.emailAccounts.find(a => a.id === (fromAccountId || thread.accountId) && a.workspaceId === req.workspace.id)
+  const account = db.data.emailAccounts.find(a => a.id === parseInt(fromAccountId || thread.accountId) && a.workspaceId === req.workspace.id)
   if (!account) return res.status(400).json({ error: 'No email account found' })
 
   // Find the last inbound message to reply to
@@ -2067,6 +2170,8 @@ inboxR.post('/threads/:id/reply', async (req, res) => {
 
   if (!account.smtpPass) return res.status(400).json({ error: 'SMTP password not configured' })
 
+  const attachments = (req.files || []).map(f => ({ filename: f.originalname, content: f.buffer, contentType: f.mimetype }))
+
   try {
     await makeTransport(account).sendMail({
       from: `"${account.fromName || account.name}" <${account.email}>`,
@@ -2074,6 +2179,7 @@ inboxR.post('/threads/:id/reply', async (req, res) => {
       subject: `Re: ${thread.subject}`,
       text: body,
       inReplyTo: lastIn?.id ? `<${lastIn.id}>` : undefined,
+      attachments: attachments.length ? attachments : undefined,
     })
 
     const msg = {
@@ -2085,9 +2191,11 @@ inboxR.post('/threads/:id/reply', async (req, res) => {
       time: new Date().toISOString(),
       inReplyTo: lastIn?.id || null,
       flags: [],
+      attachmentNames: attachments.map(a => a.filename),
     }
     thread.messages.push(msg)
     thread.lastMessageAt = msg.time
+    thread.hasAttachment = thread.hasAttachment || attachments.length > 0
     await db.write()
     res.json(msg)
   } catch(e) {
@@ -2096,19 +2204,22 @@ inboxR.post('/threads/:id/reply', async (req, res) => {
 })
 
 // POST /api/inbox/compose  — send new email via SMTP
-inboxR.post('/compose', async (req, res) => {
+inboxR.post('/compose', uploadAttachments.array('attachments', 5), async (req, res) => {
   const { to, subject, body, fromAccountId } = req.body
   if (!to || !subject || !body) return res.status(400).json({ error: 'to, subject, body required' })
 
   const wsAccounts = db.data.emailAccounts.filter(a => a.workspaceId === req.workspace.id)
-  const account = wsAccounts.find(a => a.id === fromAccountId) || wsAccounts[0]
+  const account = wsAccounts.find(a => a.id === parseInt(fromAccountId)) || wsAccounts[0]
   if (!account) return res.status(400).json({ error: 'No email account configured' })
   if (!account.smtpPass) return res.status(400).json({ error: 'SMTP password not configured' })
+
+  const attachments = (req.files || []).map(f => ({ filename: f.originalname, content: f.buffer, contentType: f.mimetype }))
 
   try {
     await makeTransport(account).sendMail({
       from: `"${account.fromName || account.name}" <${account.email}>`,
       to, subject, text: body,
+      attachments: attachments.length ? attachments : undefined,
     })
 
     const thread = {
@@ -2125,12 +2236,13 @@ inboxR.post('/compose', async (req, res) => {
         time: new Date().toISOString(),
         inReplyTo: null,
         flags: [],
+        attachmentNames: attachments.map(a => a.filename),
       }],
       read: true,
       starred: false,
       archived: false,
       labels: [],
-      hasAttachment: false,
+      hasAttachment: attachments.length > 0,
       lastMessageAt: new Date().toISOString(),
     }
     db.data.inboxThreads.push(thread)
@@ -2143,7 +2255,7 @@ inboxR.post('/compose', async (req, res) => {
 
 // POST /api/inbox/sync  — sync all connected accounts
 inboxR.post('/sync', async (req, res) => {
-  const accounts = db.data.emailAccounts.filter(a => a.workspaceId === req.workspace.id)
+  const accounts = db.data.emailAccounts.filter(a => a.workspaceId === req.workspace.id && a.status !== 'disconnected')
   if (!accounts.length) return res.json({ ok: true, results: [], message: 'No accounts configured.' })
 
   res.json({ ok: true, message: 'Sync started in background.' })
@@ -2703,6 +2815,18 @@ referralR.get('/', async (req, res) => {
 })
 
 app.use('/api/referral', referralR)
+
+// Catches Multer errors (oversized file, too many files) so attachment uploads
+// fail with a clean JSON message instead of Express's default HTML 500.
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    const msg = err.code === 'LIMIT_FILE_SIZE' ? 'Attachment too large (max 10MB per file).'
+      : err.code === 'LIMIT_FILE_COUNT' ? 'Too many attachments (max 5 files).'
+      : err.message
+    return res.status(400).json({ error: msg })
+  }
+  next(err)
+})
 
 // ─── Serve built frontend in production ───────────────────────────────────────
 if (process.env.NODE_ENV === 'production') {

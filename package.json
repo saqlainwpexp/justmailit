@@ -38,6 +38,7 @@
     "lowdb": "^7.0.1",
     "lucide-react": "^1.21.0",
     "mailparser": "^3.9.12",
+    "multer": "^2.2.0",
     "nodemailer": "^6.9.14",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

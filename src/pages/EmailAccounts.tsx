@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Plus, Mail, MoreHorizontal, Trash2, Edit3, RefreshCw,
   CheckCircle, XCircle, Loader2, AlertCircle, X, Check,
-  Wifi, Send, TrendingUp,
+  Wifi, WifiOff, Send, TrendingUp, PlugZap,
 } from 'lucide-react'
 import { useData, apiFetch } from '../lib/api'
 
@@ -11,7 +11,7 @@ interface Account {
   smtpHost: string; smtpPort: number; smtpUser: string
   smtpSecure: boolean; dailyLimit: number; sentToday: number
   totalSent: number; opens: number; clicks: number; bounces: number
-  status: 'pending'|'connected'|'error'|'testing'
+  status: 'pending'|'connected'|'error'|'testing'|'disconnected'
   color: string; provider: string; createdAt: string; lastTestedAt?: string
 }
 
@@ -26,10 +26,11 @@ const PROVIDERS = [
 const COLORS = ['#2d5a3d','#7c3aed','#2563eb','#d97706','#f0634a','#db2777']
 
 const STATUS_CFG = {
-  pending:   { label:'Pending',   icon:AlertCircle, cls:'bg-sage-100 text-sage-500'  },
-  connected: { label:'Connected', icon:CheckCircle, cls:'bg-green-50 text-green-700' },
-  error:     { label:'Error',     icon:XCircle,     cls:'bg-red-50 text-red-600'     },
-  testing:   { label:'Testing…',  icon:Loader2,     cls:'bg-blue-50 text-blue-600'   },
+  pending:      { label:'Pending',      icon:AlertCircle, cls:'bg-sage-100 text-sage-500'  },
+  connected:    { label:'Connected',    icon:CheckCircle, cls:'bg-green-50 text-green-700' },
+  error:        { label:'Error',        icon:XCircle,     cls:'bg-red-50 text-red-600'     },
+  testing:      { label:'Testing…',     icon:Loader2,     cls:'bg-blue-50 text-blue-600'   },
+  disconnected: { label:'Disconnected', icon:WifiOff,     cls:'bg-sage-100 text-sage-500'  },
 }
 
 function AccountModal({ initial, onSave, onClose }: { initial?:Account; onSave:()=>void; onClose:()=>void }) {
@@ -175,7 +176,7 @@ function Toast({ msg, ok, onClose }: { msg:string; ok:boolean; onClose:()=>void 
   )
 }
 
-function MoreMenu({ onEdit, onDelete }: { onEdit:()=>void; onDelete:()=>void }) {
+function MoreMenu({ onEdit, onDelete, onDisconnect, onReconnect, disconnected }: { onEdit:()=>void; onDelete:()=>void; onDisconnect:()=>void; onReconnect:()=>void; disconnected:boolean }) {
   const [open,setOpen]=useState(false)
   const ref=useRef<HTMLDivElement>(null)
   useEffect(()=>{
@@ -186,8 +187,13 @@ function MoreMenu({ onEdit, onDelete }: { onEdit:()=>void; onDelete:()=>void }) 
   return (
     <div ref={ref} className="relative">
       <button onClick={()=>setOpen(v=>!v)} className="w-7 h-7 rounded-lg hover:bg-sage-100 flex items-center justify-center"><MoreHorizontal className="w-4 h-4 text-sage-400"/></button>
-      {open&&<div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-xl shadow-lg border border-sage-100 overflow-hidden z-20 py-1">
+      {open&&<div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-xl shadow-lg border border-sage-100 overflow-hidden z-20 py-1">
         <button onClick={()=>{setOpen(false);onEdit()}} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-sage-700 hover:bg-sage-50"><Edit3 className="w-3.5 h-3.5"/>Edit</button>
+        {disconnected ? (
+          <button onClick={()=>{setOpen(false);onReconnect()}} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-forest hover:bg-forest/5"><PlugZap className="w-3.5 h-3.5"/>Reconnect</button>
+        ) : (
+          <button onClick={()=>{setOpen(false);onDisconnect()}} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-sage-700 hover:bg-sage-50"><WifiOff className="w-3.5 h-3.5"/>Disconnect</button>
+        )}
         <button onClick={()=>{setOpen(false);onDelete()}} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-600 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5"/>Delete</button>
       </div>}
     </div>
@@ -223,8 +229,17 @@ export default function EmailAccounts() {
   }
 
   async function deleteAccount(id:number) {
-    if(!confirm('Delete this account? Campaigns using it will need a new sender assigned.'))return
+    if(!confirm('Delete this account? Campaigns using it will need a new sender assigned, and its synced inbox messages will be removed from Justmailit.'))return
     await apiFetch(`/api/accounts/${id}`,{method:'DELETE'}); reload()
+  }
+
+  async function disconnectAccount(id:number) {
+    if(!confirm("Disconnect this account? Its synced emails will be removed from Justmailit's inbox (your actual mailbox is untouched). Reconnecting will re-sync fresh."))return
+    await apiFetch(`/api/accounts/${id}/disconnect`,{method:'POST'}); reload()
+  }
+
+  async function reconnectAccount(id:number) {
+    await apiFetch(`/api/accounts/${id}/reconnect`,{method:'POST'}); reload()
   }
 
   return (
@@ -281,7 +296,13 @@ export default function EmailAccounts() {
                     <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${s.cls}`}>
                       <Icon className={`w-2.5 h-2.5 ${a.status==='testing'?'animate-spin':''}`}/>{s.label}
                     </span>
-                    <MoreMenu onEdit={()=>{setEditing(a);setShowModal(true)}} onDelete={()=>deleteAccount(a.id)}/>
+                    <MoreMenu
+                      onEdit={()=>{setEditing(a);setShowModal(true)}}
+                      onDelete={()=>deleteAccount(a.id)}
+                      onDisconnect={()=>disconnectAccount(a.id)}
+                      onReconnect={()=>reconnectAccount(a.id)}
+                      disconnected={a.status==='disconnected'}
+                    />
                   </div>
                 </div>
 

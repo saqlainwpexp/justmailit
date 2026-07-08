@@ -17,6 +17,7 @@ interface Message {
   body: string
   time: string
   inReplyTo: string | null
+  attachmentNames?: string[]
 }
 
 interface Thread {
@@ -95,9 +96,25 @@ export default function Inbox() {
   const [sending,         setSending]         = useState(false)
   const [sendError,       setSendError]       = useState<string | null>(null)
   const [localThreads,    setLocalThreads]    = useState<Thread[]>([])
+  const [replyFiles,      setReplyFiles]      = useState<File[]>([])
+  const [composeFiles,    setComposeFiles]    = useState<File[]>([])
 
   const moreMenuRef      = useRef<HTMLDivElement>(null)
   const accountPickerRef = useRef<HTMLDivElement>(null)
+  const replyFileRef     = useRef<HTMLInputElement>(null)
+  const composeFileRef   = useRef<HTMLInputElement>(null)
+
+  const MAX_ATTACHMENTS = 5
+  const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+
+  function pickFiles(e: React.ChangeEvent<HTMLInputElement>, current: File[], setFiles: (f: File[]) => void) {
+    const picked = Array.from(e.target.files || [])
+    e.target.value = ''
+    const oversized = picked.find(f => f.size > MAX_ATTACHMENT_SIZE)
+    if (oversized) { setSendError(`"${oversized.name}" is too large (max 10MB per file).`); return }
+    const combined = [...current, ...picked].slice(0, MAX_ATTACHMENTS)
+    setFiles(combined)
+  }
 
   const qs = new URLSearchParams({
     folder: activeFolder,
@@ -150,6 +167,7 @@ export default function Inbox() {
     setSelectedThread(t)
     setShowMoreMenu(false)
     setReplyText('')
+    setReplyFiles([])
     setSendError(null)
     const acct = accounts.find(a => a.id === t.accountId)
     if (acct) setReplyAccountId(acct.id)
@@ -167,19 +185,33 @@ export default function Inbox() {
     await apiFetch(`/api/inbox/threads/${id}`, { method: 'DELETE' }).catch(() => {})
   }
 
+  // apiFetch always forces a JSON content-type header, which breaks multipart
+  // uploads (the browser needs to set its own boundary) — so attachment sends
+  // go through raw fetch with FormData instead.
+  async function sendMultipart<T>(url: string, fields: Record<string, string>, files: File[]): Promise<T> {
+    const form = new FormData()
+    for (const [k, v] of Object.entries(fields)) form.append(k, v)
+    for (const f of files) form.append('attachments', f)
+    const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `HTTP ${res.status}`)
+    return data as T
+  }
+
   const sendReply = async () => {
     if (!selectedThread || !replyText.trim()) return
     setSending(true)
     setSendError(null)
     try {
-      const msg = await apiFetch<Message>(`/api/inbox/threads/${selectedThread.id}/reply`, {
-        method: 'POST',
-        body: JSON.stringify({ body: replyText, fromAccountId: replyAccountId || selectedThread.accountId }),
-      })
+      const fields = { body: replyText, fromAccountId: String(replyAccountId || selectedThread.accountId) }
+      const msg = replyFiles.length
+        ? await sendMultipart<Message>(`/api/inbox/threads/${selectedThread.id}/reply`, fields, replyFiles)
+        : await apiFetch<Message>(`/api/inbox/threads/${selectedThread.id}/reply`, { method: 'POST', body: JSON.stringify(fields) })
       const updated = { ...selectedThread, messages: [...selectedThread.messages, msg] }
       setLocalThreads(ts => ts.map(t => t.id === selectedThread.id ? updated : t))
       setSelectedThread(updated)
       setReplyText('')
+      setReplyFiles([])
     } catch(e: any) {
       setSendError(e.message)
     } finally {
@@ -192,13 +224,14 @@ export default function Inbox() {
     setSending(true)
     setSendError(null)
     try {
-      const thread = await apiFetch<Thread>('/api/inbox/compose', {
-        method: 'POST',
-        body: JSON.stringify({ to: compose.to, subject: compose.subject, body: compose.body, fromAccountId: compose.fromAccountId }),
-      })
+      const fields = { to: compose.to, subject: compose.subject, body: compose.body, fromAccountId: String(compose.fromAccountId) }
+      const thread = composeFiles.length
+        ? await sendMultipart<Thread>('/api/inbox/compose', fields, composeFiles)
+        : await apiFetch<Thread>('/api/inbox/compose', { method: 'POST', body: JSON.stringify(fields) })
       setLocalThreads(ts => [thread, ...ts])
       setShowCompose(false)
       setCompose(p => ({ ...p, to: '', subject: '', body: '' }))
+      setComposeFiles([])
     } catch(e: any) {
       setSendError(e.message)
     } finally {
@@ -509,6 +542,15 @@ export default function Inbox() {
                       )}>
                         {msg.body}
                       </div>
+                      {msg.attachmentNames && msg.attachmentNames.length > 0 && (
+                        <div className={cn('flex flex-wrap gap-1.5 mt-1.5', isOut ? 'justify-end' : 'justify-start')}>
+                          {msg.attachmentNames.map((name, i) => (
+                            <span key={i} className="inline-flex items-center gap-1 text-[10px] bg-sage-100 text-sage-600 rounded-full px-2 py-0.5">
+                              <Paperclip className="w-2.5 h-2.5" />{name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )
@@ -559,12 +601,29 @@ export default function Inbox() {
                   rows={4}
                   className="w-full px-4 py-3 text-sm text-sage-800 placeholder:text-sage-400 resize-none focus:outline-none"
                 />
+                {replyFiles.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 px-4 pb-2">
+                    {replyFiles.map((f, i) => (
+                      <span key={i} className="inline-flex items-center gap-1 text-[10px] bg-sage-100 text-sage-700 rounded-full pl-2 pr-1 py-0.5">
+                        <Paperclip className="w-2.5 h-2.5 shrink-0" />
+                        <span className="truncate max-w-[120px]">{f.name}</span>
+                        <button onClick={() => setReplyFiles(fs => fs.filter((_, x) => x !== i))} className="hover:text-red-500 shrink-0"><X className="w-2.5 h-2.5" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div className="flex items-center justify-between px-4 py-2.5 border-t border-sage-100 bg-sage-50">
-                  <button className="w-7 h-7 hover:bg-sage-200 rounded-lg flex items-center justify-center">
+                  <button
+                    onClick={() => replyFileRef.current?.click()}
+                    disabled={replyFiles.length >= MAX_ATTACHMENTS}
+                    className="w-7 h-7 hover:bg-sage-200 rounded-lg flex items-center justify-center disabled:opacity-40"
+                    title="Attach files"
+                  >
                     <Paperclip className="w-3.5 h-3.5 text-sage-400" />
                   </button>
+                  <input ref={replyFileRef} type="file" multiple className="hidden" onChange={e => pickFiles(e, replyFiles, setReplyFiles)} />
                   <div className="flex items-center gap-2">
-                    {replyText && <button onClick={() => setReplyText('')} className="text-xs text-sage-400 hover:text-sage-700">Discard</button>}
+                    {replyText && <button onClick={() => { setReplyText(''); setReplyFiles([]) }} className="text-xs text-sage-400 hover:text-sage-700">Discard</button>}
                     <button
                       onClick={sendReply}
                       disabled={!replyText.trim() || sending}
@@ -594,7 +653,7 @@ export default function Inbox() {
           <div className="fixed bottom-6 right-6 z-50 w-[520px] bg-white rounded-2xl shadow-2xl border border-sage-100 overflow-hidden flex flex-col max-h-[80vh]">
             <div className="flex items-center justify-between px-5 py-3.5 bg-forest shrink-0">
               <span className="text-sm font-semibold text-white">New message</span>
-              <button onClick={() => setShowCompose(false)} className="w-6 h-6 rounded-lg hover:bg-white/20 flex items-center justify-center">
+              <button onClick={() => { setShowCompose(false); setComposeFiles([]) }} className="w-6 h-6 rounded-lg hover:bg-white/20 flex items-center justify-center">
                 <X className="w-4 h-4 text-white" />
               </button>
             </div>
@@ -634,6 +693,18 @@ export default function Inbox() {
               className="flex-1 px-5 py-4 text-sm text-sage-800 placeholder:text-sage-300 resize-none focus:outline-none min-h-[200px]"
             />
 
+            {composeFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-5 pb-2">
+                {composeFiles.map((f, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 text-[10px] bg-sage-100 text-sage-700 rounded-full pl-2 pr-1 py-0.5">
+                    <Paperclip className="w-2.5 h-2.5 shrink-0" />
+                    <span className="truncate max-w-[120px]">{f.name}</span>
+                    <button onClick={() => setComposeFiles(fs => fs.filter((_, x) => x !== i))} className="hover:text-red-500 shrink-0"><X className="w-2.5 h-2.5" /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+
             {sendError && (
               <div className="flex items-start gap-2 bg-red-50 border-t border-red-200 px-5 py-2.5 text-xs text-red-700">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{sendError}
@@ -641,11 +712,17 @@ export default function Inbox() {
             )}
 
             <div className="flex items-center justify-between px-4 py-3 border-t border-sage-100 bg-sage-50 shrink-0">
-              <button className="w-7 h-7 hover:bg-sage-200 rounded-lg flex items-center justify-center">
+              <button
+                onClick={() => composeFileRef.current?.click()}
+                disabled={composeFiles.length >= MAX_ATTACHMENTS}
+                className="w-7 h-7 hover:bg-sage-200 rounded-lg flex items-center justify-center disabled:opacity-40"
+                title="Attach files"
+              >
                 <Paperclip className="w-3.5 h-3.5 text-sage-400" />
               </button>
+              <input ref={composeFileRef} type="file" multiple className="hidden" onChange={e => pickFiles(e, composeFiles, setComposeFiles)} />
               <div className="flex items-center gap-2">
-                <button onClick={() => setShowCompose(false)} className="text-xs text-sage-400 hover:text-sage-700 px-3 py-2">Discard</button>
+                <button onClick={() => { setShowCompose(false); setComposeFiles([]) }} className="text-xs text-sage-400 hover:text-sage-700 px-3 py-2">Discard</button>
                 <button
                   onClick={sendCompose}
                   disabled={!compose.to || !compose.subject || !compose.body || sending}
