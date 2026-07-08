@@ -1,4 +1,4 @@
--- Justmailit — Supabase/Postgres schema
+-- KeepMailing — Supabase/Postgres schema
 -- Each collection is stored as one table: an integer id (app-assigned) + a JSONB blob
 -- holding the full record. This mirrors the app's existing dynamic object shapes
 -- (many routes do `{ id, ...req.body }`) without requiring a rigid column-per-field

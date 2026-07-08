@@ -229,12 +229,12 @@ export default function EmailAccounts() {
   }
 
   async function deleteAccount(id:number) {
-    if(!confirm('Delete this account? Campaigns using it will need a new sender assigned, and its synced inbox messages will be removed from Justmailit.'))return
+    if(!confirm('Delete this account? Campaigns using it will need a new sender assigned, and its synced inbox messages will be removed from KeepMailing.'))return
     await apiFetch(`/api/accounts/${id}`,{method:'DELETE'}); reload()
   }
 
   async function disconnectAccount(id:number) {
-    if(!confirm("Disconnect this account? Its synced emails will be removed from Justmailit's inbox (your actual mailbox is untouched). Reconnecting will re-sync fresh."))return
+    if(!confirm("Disconnect this account? Its synced emails will be removed from KeepMailing's inbox (your actual mailbox is untouched). Reconnecting will re-sync fresh."))return
     await apiFetch(`/api/accounts/${id}/disconnect`,{method:'POST'}); reload()
   }
 

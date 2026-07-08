@@ -272,7 +272,7 @@ function SuccessModal({ planName, onClose }: { planName: string; onClose: () => 
         </div>
         <h3 className="text-xl font-bold text-gray-900 mb-2">You're on {planName}!</h3>
         <p className="text-sm text-gray-500 leading-relaxed mb-6">
-          Your plan is now active. All new limits take effect immediately. Thanks for choosing Justmailit.
+          Your plan is now active. All new limits take effect immediately. Thanks for choosing KeepMailing.
         </p>
         <button
           onClick={onClose}
@@ -321,7 +321,7 @@ export default function Pricing() {
           <div className="w-7 h-7 rounded-lg bg-[#2d5a3d] flex items-center justify-center">
             <Sparkles className="w-3.5 h-3.5 text-white" />
           </div>
-          <span className="font-bold text-[#1a3526] text-base tracking-tight">justmailit</span>
+          <span className="font-bold text-[#1a3526] text-base tracking-tight">KeepMailing</span>
         </div>
       </div>
 

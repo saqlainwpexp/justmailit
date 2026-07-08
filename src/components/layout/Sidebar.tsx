@@ -201,7 +201,7 @@ export default function Sidebar() {
               <div className="w-8 h-8 bg-forest rounded-lg flex items-center justify-center shrink-0">
                 <Mail className="w-4 h-4 text-white" />
               </div>
-              <span className="text-[17px] font-semibold text-forest tracking-tight">justmailit</span>
+              <span className="text-[17px] font-semibold text-forest tracking-tight">KeepMailing</span>
             </button>
             <button
               onClick={() => setCollapsed(true)}

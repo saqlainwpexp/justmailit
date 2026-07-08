@@ -30,7 +30,7 @@ function VideoPanel() {
           <div className="w-8 h-8 rounded-lg bg-[#4a7c59] flex items-center justify-center">
             <Mail className="w-4 h-4 text-white" />
           </div>
-          <span className="text-white font-bold text-lg tracking-tight">justmailit</span>
+          <span className="text-white font-bold text-lg tracking-tight">KeepMailing</span>
         </div>
         <div>
           <h2 className="text-4xl font-bold text-white leading-tight mb-4">
@@ -51,7 +51,7 @@ function VideoPanel() {
         </div>
         <div className="bg-white/8 backdrop-blur-sm border border-white/10 rounded-2xl p-5">
           <p className="text-white/80 text-sm leading-relaxed italic mb-3">
-            "Emailit cut our outreach setup time in half. We went from 200 to 2,000 personalised emails a day."
+            "KeepMailing cut our outreach setup time in half. We went from 200 to 2,000 personalised emails a day."
           </p>
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-full bg-[#4a7c59] flex items-center justify-center text-white text-xs font-bold">JK</div>
@@ -120,12 +120,12 @@ export default function SignIn() {
           <div className="w-8 h-8 rounded-lg bg-[#2d5a3d] flex items-center justify-center">
             <Mail className="w-4 h-4 text-white" />
           </div>
-          <span className="font-bold text-lg text-[#1a3526] tracking-tight">justmailit</span>
+          <span className="font-bold text-lg text-[#1a3526] tracking-tight">KeepMailing</span>
         </div>
 
         <div className="max-w-sm w-full">
           <h1 className="text-2xl font-bold text-gray-900 mb-1.5">Welcome back</h1>
-          <p className="text-sm text-gray-500 mb-8">Sign in to your Justmailit account</p>
+          <p className="text-sm text-gray-500 mb-8">Sign in to your KeepMailing account</p>
 
           {isLocked && (
             <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4 mb-6">

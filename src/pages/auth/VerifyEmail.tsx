@@ -51,7 +51,7 @@ export default function VerifyEmail() {
           <div className="w-8 h-8 rounded-lg bg-[#2d5a3d] flex items-center justify-center">
             <Mail className="w-4 h-4 text-white" />
           </div>
-          <span className="font-bold text-lg text-[#1a3526] tracking-tight">justmailit</span>
+          <span className="font-bold text-lg text-[#1a3526] tracking-tight">KeepMailing</span>
         </div>
 
         {status === 'loading' && (

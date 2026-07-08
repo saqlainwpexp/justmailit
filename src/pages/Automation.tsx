@@ -30,11 +30,11 @@ const SEED: WorkflowMeta[] = [
     id: 1, name: 'Welcome Sequence', status: 'active', enrolledCount: 124,
     nodes: [
       { id: '1', type: 'trigger',   position: { x: 260, y: 30  }, data: { label: 'Contact added to list',   subtitle: 'List: Warm Leads',          triggerType: 'list_added', triggerValue: 'Warm Leads' } },
-      { id: '2', type: 'email',     position: { x: 260, y: 155 }, data: { label: 'Send welcome email',      subtitle: 'from: sales@justmailit.com',    fromAccount: 'sales@justmailit.com', subject: 'Welcome, {{first_name}}!' } },
+      { id: '2', type: 'email',     position: { x: 260, y: 155 }, data: { label: 'Send welcome email',      subtitle: 'from: sales@keepmailing.com',    fromAccount: 'sales@keepmailing.com', subject: 'Welcome, {{first_name}}!' } },
       { id: '3', type: 'delay',     position: { x: 260, y: 280 }, data: { label: 'Wait 2 days',             subtitle: 'Then continue',             delayAmount: 2, delayUnit: 'days' } },
       { id: '4', type: 'condition', position: { x: 260, y: 405 }, data: { label: 'Email was opened?',       subtitle: 'Check open status',         conditionType: 'email_opened' } },
-      { id: '5', type: 'email',     position: { x: 50,  y: 540 }, data: { label: 'Follow-up (not opened)', subtitle: 'from: sales@justmailit.com',    fromAccount: 'sales@justmailit.com' } },
-      { id: '6', type: 'email',     position: { x: 470, y: 540 }, data: { label: 'Value email (opened)',    subtitle: 'from: sales@justmailit.com',    fromAccount: 'sales@justmailit.com' } },
+      { id: '5', type: 'email',     position: { x: 50,  y: 540 }, data: { label: 'Follow-up (not opened)', subtitle: 'from: sales@keepmailing.com',    fromAccount: 'sales@keepmailing.com' } },
+      { id: '6', type: 'email',     position: { x: 470, y: 540 }, data: { label: 'Value email (opened)',    subtitle: 'from: sales@keepmailing.com',    fromAccount: 'sales@keepmailing.com' } },
       { id: '7', type: 'action',    position: { x: 470, y: 665 }, data: { label: 'Add tag',                 subtitle: 'Tag: engaged',              actionType: 'add_tag', actionValue: 'engaged' } },
     ],
     edges: [
@@ -50,11 +50,11 @@ const SEED: WorkflowMeta[] = [
     id: 2, name: 'Cold Outreach', status: 'active', enrolledCount: 88,
     nodes: [
       { id: '1', type: 'trigger', position: { x: 260, y: 30  }, data: { label: 'Tag added: cold-lead', subtitle: 'Tag: cold-lead', triggerType: 'tag_added', triggerValue: 'cold-lead' } },
-      { id: '2', type: 'email',   position: { x: 260, y: 155 }, data: { label: 'First outreach',       subtitle: 'from: outreach@justmailit.com', fromAccount: 'outreach@justmailit.com' } },
+      { id: '2', type: 'email',   position: { x: 260, y: 155 }, data: { label: 'First outreach',       subtitle: 'from: outreach@keepmailing.com', fromAccount: 'outreach@keepmailing.com' } },
       { id: '3', type: 'delay',   position: { x: 260, y: 280 }, data: { label: 'Wait 3 days',          subtitle: 'Then continue', delayAmount: 3, delayUnit: 'days' } },
-      { id: '4', type: 'email',   position: { x: 260, y: 405 }, data: { label: 'Follow-up #2',         subtitle: 'from: outreach@justmailit.com', fromAccount: 'outreach@justmailit.com' } },
+      { id: '4', type: 'email',   position: { x: 260, y: 405 }, data: { label: 'Follow-up #2',         subtitle: 'from: outreach@keepmailing.com', fromAccount: 'outreach@keepmailing.com' } },
       { id: '5', type: 'delay',   position: { x: 260, y: 530 }, data: { label: 'Wait 5 days',          subtitle: 'Then continue', delayAmount: 5, delayUnit: 'days' } },
-      { id: '6', type: 'email',   position: { x: 260, y: 655 }, data: { label: 'Final follow-up',      subtitle: 'from: outreach@justmailit.com', fromAccount: 'outreach@justmailit.com' } },
+      { id: '6', type: 'email',   position: { x: 260, y: 655 }, data: { label: 'Final follow-up',      subtitle: 'from: outreach@keepmailing.com', fromAccount: 'outreach@keepmailing.com' } },
     ],
     edges: [
       { id: 'e1', source: '1', target: '2', style: EDGE_STYLE },
@@ -68,7 +68,7 @@ const SEED: WorkflowMeta[] = [
     id: 3, name: 'Re-engagement', status: 'paused', enrolledCount: 0,
     nodes: [
       { id: '1', type: 'trigger',   position: { x: 260, y: 30  }, data: { label: 'New contact created',   subtitle: 'Any new contact', triggerType: 'contact_created' } },
-      { id: '2', type: 'email',     position: { x: 260, y: 155 }, data: { label: 'Re-engagement email',   subtitle: 'from: hello@justmailit.com', fromAccount: 'hello@justmailit.com' } },
+      { id: '2', type: 'email',     position: { x: 260, y: 155 }, data: { label: 'Re-engagement email',   subtitle: 'from: hello@keepmailing.com', fromAccount: 'hello@keepmailing.com' } },
       { id: '3', type: 'condition', position: { x: 260, y: 280 }, data: { label: 'Replied to email?',     subtitle: 'Check reply', conditionType: 'replied' } },
       { id: '4', type: 'action',    position: { x: 50,  y: 415 }, data: { label: 'Add tag: re-engaged',  subtitle: 'Tag: re-engaged', actionType: 'add_tag', actionValue: 're-engaged' } },
       { id: '5', type: 'action',    position: { x: 470, y: 415 }, data: { label: 'Add tag: no-reply',    subtitle: 'Tag: no-reply', actionType: 'add_tag', actionValue: 'no-reply' } },

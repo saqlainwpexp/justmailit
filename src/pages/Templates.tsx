@@ -38,8 +38,8 @@ const MERGE_TAG_EXAMPLES: Record<string, string> = {
   '{{email}}':           'alex@example.com',
   '{{company}}':         'Acme Corp',
   '{{sender_name}}':     'Saqlain',
-  '{{sender_email}}':    'sales@justmailit.com',
-  '{{unsubscribe_link}}':'https://justmailit.com/unsub/demo',
+  '{{sender_email}}':    'sales@keepmailing.com',
+  '{{unsubscribe_link}}':'https://keepmailing.com/unsub/demo',
   '{{date}}':            new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
   '{{topic}}':           'Email Marketing Tips',
 }
@@ -385,7 +385,7 @@ function PreviewModal({ t, onClose }: { t: Template; onClose: () => void }) {
             <div className="px-6 py-4 border-b border-sage-100">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-[10px] text-sage-400 w-10 shrink-0">From</span>
-                <span className="text-xs font-medium text-sage-700">Saqlain &lt;sales@justmailit.com&gt;</span>
+                <span className="text-xs font-medium text-sage-700">Saqlain &lt;sales@keepmailing.com&gt;</span>
               </div>
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-[10px] text-sage-400 w-10 shrink-0">To</span>

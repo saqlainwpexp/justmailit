@@ -62,7 +62,7 @@ function VideoPanel() {
           <div className="w-8 h-8 rounded-lg bg-[#4a7c59] flex items-center justify-center">
             <Mail className="w-4 h-4 text-white" />
           </div>
-          <span className="text-white font-bold text-lg tracking-tight">justmailit</span>
+          <span className="text-white font-bold text-lg tracking-tight">KeepMailing</span>
         </div>
         <div>
           <h2 className="text-4xl font-bold text-white leading-tight mb-4">
@@ -185,7 +185,7 @@ export default function SignUp() {
             <div className="w-8 h-8 rounded-lg bg-[#2d5a3d] flex items-center justify-center">
               <Mail className="w-4 h-4 text-white" />
             </div>
-            <span className="font-bold text-lg text-[#1a3526] tracking-tight">justmailit</span>
+            <span className="font-bold text-lg text-[#1a3526] tracking-tight">KeepMailing</span>
           </div>
 
           <div className="max-w-sm w-full">

@@ -32,7 +32,7 @@ export default function ForgotPassword() {
         <div className="w-8 h-8 rounded-lg bg-[#2d5a3d] flex items-center justify-center">
           <Mail className="w-4 h-4 text-white" />
         </div>
-        <span className="font-bold text-lg text-[#1a3526] tracking-tight">justmailit</span>
+        <span className="font-bold text-lg text-[#1a3526] tracking-tight">KeepMailing</span>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 w-full max-w-md p-8">
@@ -43,7 +43,7 @@ export default function ForgotPassword() {
             </div>
             <h2 className="text-xl font-bold text-gray-900 mb-2">Check your email</h2>
             <p className="text-sm text-gray-500 leading-relaxed mb-6">
-              If <span className="font-semibold text-gray-700">{email}</span> is associated with an Emailit account, you'll receive a password reset link within a few minutes.
+              If <span className="font-semibold text-gray-700">{email}</span> is associated with a KeepMailing account, you'll receive a password reset link within a few minutes.
             </p>
             <div className="bg-[#f0f7f2] border border-[#c8e0cf] rounded-xl p-4 text-left space-y-1.5 mb-6">
               <p className="text-xs font-semibold text-[#2d5a3d]">Didn't receive it?</p>
@@ -139,7 +139,7 @@ export default function ForgotPassword() {
         {' · '}
         <Link to="/terms" className="hover:underline">Terms of Service</Link>
         {' · '}
-        <a href="mailto:support@justmailit.com" className="hover:underline">Contact support</a>
+        <a href="mailto:support@keepmailing.com" className="hover:underline">Contact support</a>
       </p>
     </div>
   )

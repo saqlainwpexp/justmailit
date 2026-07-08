@@ -26,7 +26,7 @@ const STEPS: Step[] = [
     iconBg: 'bg-amber-50',
     iconColor: 'text-amber-500',
     badge: 'Welcome',
-    title: 'Welcome to Justmailit!',
+    title: 'Welcome to KeepMailing!',
     description:
       "You're all set up. Let's take a quick tour so you can send emails that actually get opened — and replied to.",
     ctaLabel: "Let's get started",
@@ -116,7 +116,7 @@ const STEPS: Step[] = [
     badge: 'All done!',
     title: "You're ready to grow!",
     description:
-      "Your Justmailit workspace is set up. Head to the dashboard to see your stats, manage campaigns, and track every reply.",
+      "Your KeepMailing workspace is set up. Head to the dashboard to see your stats, manage campaigns, and track every reply.",
     ctaLabel: 'Go to dashboard',
   },
 ]

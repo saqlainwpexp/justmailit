@@ -111,7 +111,7 @@ function DomainCard({
 
   const records: DnsRecord[] = domain.records || [
     { key:'spf',   type:'TXT', name:domain.domain,                           value:'Loading…', description:'SPF record' },
-    { key:'dkim',  type:'TXT', name:`emailit._domainkey.${domain.domain}`,   value:'Loading…', description:'DKIM record' },
+    { key:'dkim',  type:'TXT', name:`keepmailing._domainkey.${domain.domain}`,   value:'Loading…', description:'DKIM record' },
     { key:'dmarc', type:'TXT', name:`_dmarc.${domain.domain}`,               value:'Loading…', description:'DMARC record' },
   ]
 

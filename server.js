@@ -1,5 +1,5 @@
 /**
- * Emailit — full backend
+ * KeepMailing — full backend
  * Auth · Email Accounts · Domains · Contacts · Templates · Campaigns · Automations
  */
 
@@ -45,7 +45,7 @@ let dbInitError = null
 
 // Seed / migration constants (used inside startup())
 const ADMIN_EMAIL    = process.env.ADMIN_EMAIL    || 'saqlainwpexp@gmail.com'
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@justmailit2025!'
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@keepmailing2025!'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -444,7 +444,7 @@ authR.post('/forgot-password', async (req, res) => {
   if (process.env.SMTP_HOST && process.env.SMTP_USER) {
     try {
       const t = nodemailer.createTransport({ host:process.env.SMTP_HOST, port:parseInt(process.env.SMTP_PORT||'587'), auth:{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS} })
-      await t.sendMail({ from:process.env.SMTP_FROM, to:user.email, subject:'Reset your Emailit password', html:`<p>Reset link (expires in 1 hour): <a href="${FRONTEND}/reset-password?token=${token}">Reset password</a></p>` })
+      await t.sendMail({ from:process.env.SMTP_FROM, to:user.email, subject:'Reset your KeepMailing password', html:`<p>Reset link (expires in 1 hour): <a href="${FRONTEND}/reset-password?token=${token}">Reset password</a></p>` })
     } catch(e) { console.warn('Reset email failed:', e.message) }
   }
 })
@@ -512,14 +512,14 @@ authR.post('/register', async (req, res) => {
   const verifyLink = `${siteUrl}/verify-email?token=${token}`
   sendTransactionalEmail({
     to: user.email,
-    subject: 'Verify your justmailit account',
+    subject: 'Verify your KeepMailing account',
     html: `<!DOCTYPE html><html><body style="font-family:sans-serif;max-width:520px;margin:40px auto;padding:0 20px;color:#1a2e1a">
       <div style="text-align:center;margin-bottom:32px">
         <div style="display:inline-flex;align-items:center;gap:8px">
           <div style="width:32px;height:32px;background:#2d5a3d;border-radius:8px;display:inline-flex;align-items:center;justify-content:center">
             <span style="color:white;font-size:16px">✉</span>
           </div>
-          <span style="font-size:18px;font-weight:700;color:#2d5a3d">justmailit</span>
+          <span style="font-size:18px;font-weight:700;color:#2d5a3d">KeepMailing</span>
         </div>
       </div>
       <h2 style="font-size:22px;font-weight:700;margin-bottom:8px">Verify your email address</h2>
@@ -564,7 +564,7 @@ authR.post('/resend-verification', async (req, res) => {
   const verifyLink = `${siteUrl}/verify-email?token=${token}`
   sendTransactionalEmail({
     to: user.email,
-    subject: 'Your new verification link — justmailit',
+    subject: 'Your new verification link — KeepMailing',
     html: `<p>Hi ${user.name},</p><p>Here's your new verification link (expires in 24 hours):</p><p><a href="${verifyLink}">${verifyLink}</a></p>`,
   }).catch(e => console.warn('Resend verification email failed:', e.message))
 })
@@ -831,8 +831,8 @@ wsR.post('/:id/invite', async (req, res) => {
   const link = `${siteUrl}/invites?token=${token}`
   sendTransactionalEmail({
     to: targetEmail,
-    subject: `${req.user.name} invited you to join "${workspace.name}" on justmailit`,
-    html: `<p>${req.user.name} (${req.user.email}) invited you to join the workspace "${workspace.name}" on justmailit.</p>
+    subject: `${req.user.name} invited you to join "${workspace.name}" on KeepMailing`,
+    html: `<p>${req.user.name} (${req.user.email}) invited you to join the workspace "${workspace.name}" on KeepMailing.</p>
            <p><a href="${link}">${existingUser ? 'Accept invite' : 'Sign up and accept invite'}</a></p>
            <p style="color:#999;font-size:12px">This invite expires in 7 days.</p>`,
   }).catch(e => console.warn('Workspace invite email failed:', e.message))
@@ -907,7 +907,7 @@ acctR.put('/:id', async (req, res) => {
 acctR.delete('/:id', async (req, res) => {
   const id = parseInt(req.params.id)
   db.data.emailAccounts = db.data.emailAccounts.filter(a => !(a.id===id && a.workspaceId===req.workspace.id))
-  // Removing an account from Justmailit should remove its synced copies of
+  // Removing an account from KeepMailing should remove its synced copies of
   // messages too — this only touches our local mirror, never the real mailbox.
   db.data.inboxThreads = db.data.inboxThreads.filter(t => !(t.accountId===id && t.workspaceId===req.workspace.id))
   await db.write(); res.json({ ok: true })
@@ -915,7 +915,7 @@ acctR.delete('/:id', async (req, res) => {
 
 // Soft "disconnect": keeps the account record (and SMTP credentials) around,
 // but stops auto-sync from touching it and clears out its previously-synced
-// inbox threads from Justmailit — the real mailbox on the provider is
+// inbox threads from KeepMailing — the real mailbox on the provider is
 // untouched. Reconnecting just flips it back to 'pending' so the next sync
 // tick re-populates the inbox fresh.
 acctR.post('/:id/disconnect', async (req, res) => {
@@ -1024,7 +1024,7 @@ function buildDnsRecords(domain, publicKey, provider) {
     ? { key:'dkim', type:'CNAME', name:'(managed by your provider)', value:`Get this from your ${provider.name} control panel`,
         description:`${provider.name} signs DKIM itself with its own key — you can't substitute a custom one. Check their DKIM setup docs.`,
         managedExternally: true, docsUrl: provider.docsUrl }
-    : { key:'dkim', type:'TXT', name:`emailit._domainkey.${domain}`, value:`v=DKIM1; k=rsa; p=${pub}`,
+    : { key:'dkim', type:'TXT', name:`keepmailing._domainkey.${domain}`, value:`v=DKIM1; k=rsa; p=${pub}`,
         description:'Only works if your mail server supports signing outgoing mail with a custom DKIM key (e.g. a self-hosted mail server, or providers like Amazon SES/SendGrid that let you upload one). Consumer providers such as Gmail, Outlook, and Hostinger manage their own DKIM and will ignore this.' }
 
   const dmarc = { key:'dmarc', type:'TXT', name:`_dmarc.${domain}`, value:`v=DMARC1; p=none; rua=mailto:dmarc@${domain}`, description:'Policy for handling unauthenticated emails' }
@@ -1047,7 +1047,7 @@ async function checkDns(domain, provider) {
     // we can't meaningfully probe it, so don't claim pass/fail against our own guess.
     results.dkim = 'external'
   } else {
-    try { const r = await dns.resolveTxt(`emailit._domainkey.${domain}`); results.dkim = r.flat().join('').includes('v=DKIM1') ? 'pass':'fail' } catch { results.dkim = 'fail' }
+    try { const r = await dns.resolveTxt(`keepmailing._domainkey.${domain}`); results.dkim = r.flat().join('').includes('v=DKIM1') ? 'pass':'fail' } catch { results.dkim = 'fail' }
   }
 
   try { const r = await dns.resolveTxt(`_dmarc.${domain}`); results.dmarc = r.flat().some(s=>s.startsWith('v=DMARC1')) ? 'pass':'fail' } catch { results.dmarc = 'fail' }
@@ -3167,7 +3167,7 @@ async function startup() {
   if (migratedWorkspaces) console.log('Workspaces migration applied')
 
   app.listen(PORT, () => {
-    console.log(`Justmailit running on port ${PORT}`)
+    console.log(`KeepMailing running on port ${PORT}`)
     console.log(`Admin: ${ADMIN_EMAIL}`)
   })
 
