@@ -457,7 +457,7 @@ authR.post('/forgot-password', async (req, res) => {
   if (!user) return
   db.data.resetTokens = db.data.resetTokens.filter(t => t.userId !== user.id)
   const token = crypto.randomBytes(48).toString('hex')
-  db.data.resetTokens.push({ token, userId: user.id, expiresAt: Date.now()+3600000, used: false })
+  db.data.resetTokens.push({ id: nextId('resetTokens'), token, userId: user.id, expiresAt: Date.now()+3600000, used: false })
   await db.write()
   if (process.env.SMTP_HOST && process.env.SMTP_USER) {
     try {
@@ -521,7 +521,7 @@ authR.post('/register', async (req, res) => {
   // Generate and store verification token
   const token = crypto.randomBytes(32).toString('hex')
   db.data.verificationTokens = (db.data.verificationTokens || []).filter(t => t.userId !== user.id)
-  db.data.verificationTokens.push({ token, userId: user.id, expiresAt: Date.now() + 24 * 3600000 })
+  db.data.verificationTokens.push({ id: nextId('verificationTokens'), token, userId: user.id, expiresAt: Date.now() + 24 * 3600000 })
   await db.write()
   // Send verification email (best-effort — don't fail registration if email send fails)
   const siteUrl = process.env.FRONTEND_URL && !process.env.FRONTEND_URL.includes('localhost')
@@ -574,7 +574,7 @@ authR.post('/resend-verification', async (req, res) => {
   if (!user || user.emailVerified) return
   const token = crypto.randomBytes(32).toString('hex')
   db.data.verificationTokens = (db.data.verificationTokens || []).filter(t => t.userId !== user.id)
-  db.data.verificationTokens.push({ token, userId: user.id, expiresAt: Date.now() + 24 * 3600000 })
+  db.data.verificationTokens.push({ id: nextId('verificationTokens'), token, userId: user.id, expiresAt: Date.now() + 24 * 3600000 })
   await db.write()
   const siteUrl = process.env.FRONTEND_URL && !process.env.FRONTEND_URL.includes('localhost')
     ? process.env.FRONTEND_URL
